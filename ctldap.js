@@ -286,6 +286,9 @@ function requestUsers(req, _res, next) {
           objectClass: [
             'person',
             'CTPerson',
+            // POSIX: nss-ldap clients (e.g. Synology DSM) require posixAccount to recognize login users.
+            // uidNumber/gidNumber are mapped client-side from the exposed `id` attribute.
+            'posixAccount',
             // Map special CT field names of associated groups to the LDAP objectClass names defined in configuration.
             ...(p2g[id] || [])
                 .flatMap((gid) => groupMap[gid].specialClasses)
@@ -333,6 +336,9 @@ function requestGroups(req, _res, next) {
       const info = g['information'];
       const groupType = groupTypes[info['groupTypeId']];
       const objectClasses = ["group", "CTGroup" + groupType.charAt(0).toUpperCase() + groupType.slice(1),
+        // POSIX: nss-ldap clients (e.g. Synology DSM) require posixGroup to resolve groups.
+        // gidNumber is mapped client-side from the exposed `id` attribute.
+        "posixGroup",
         // Map observed special CT field names to the LDAP objectClass names defined in configuration.
         ...g.specialClasses.map((key) => site.specialGroupMappings[key]['groupClass'])];
       return {

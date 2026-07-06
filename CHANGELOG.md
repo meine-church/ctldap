@@ -1,5 +1,10 @@
 # Changelog
 
+### 3.1.4
+- Added `posixAccount` objectClass to users and `posixGroup` to groups for POSIX /
+  nss-ldap compatibility (Synology DSM requires these for the domain join test).
+  `uidNumber`/`gidNumber` are mapped client-side from the existing `id` attribute.
+
 ### 3.1.3
 - Added `memberUid` attribute (bare usernames) to group objects for RFC2307 / nss-ldap
   compatibility (e.g. Synology DSM). `uniqueMember` is preserved unchanged.
