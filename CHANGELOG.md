@@ -1,5 +1,11 @@
 # Changelog
 
+### 3.2.4
+- Searches are now authorized for any successfully authenticated connection, not just the admin
+  bind. Clients like Synology DSM bind as the user and then search (to resolve the user's own
+  groups) during login; the previous admin-only restriction rejected that with "Insufficient
+  access rights" and broke login. Anonymous/unauthenticated connections are still rejected.
+
 ### 3.2.3
 - Root DSE now advertises the real configured naming context(s) (`o=<site>`) instead of
   `o=undefined`. The Root DSE is queried with an empty base DN, so deriving `namingContexts`

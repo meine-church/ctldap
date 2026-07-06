@@ -399,17 +399,22 @@ function requestGroups(req, _res, next) {
 }
 
 /**
- * Validates root user authentication by comparing the bind DN with the configured admin DN.
+ * Authorizes a search: the admin bind, or any connection that has completed a successful
+ * authentication (see authenticate(), which sets `_ctAuthenticated` on the connection).
+ * Clients such as Synology DSM bind as the user and then search (e.g. to resolve the user's
+ * own groups) during login, so restricting searches to the admin bind alone breaks their login.
+ * Anonymous/unauthenticated connections remain rejected.
  * @param {object} req - Request object
  * @param {object} _res - Response object
  * @param {function} next - Next handler function of filter chain
  */
 function authorize(req, _res, next) {
-  if (!req.connection.ldap.bindDN.equals(req.site.adminDn)) {
-    logWarn(req.site, "Rejected search without proper binding!");
-    return next(new InsufficientAccessRightsError());
+  const ldapConn = req.connection.ldap;
+  if (ldapConn.bindDN.equals(req.site.adminDn) || ldapConn._ctAuthenticated === true) {
+    return next();
   }
-  return next();
+  logWarn(req.site, () => `Rejected search from unauthenticated bind: ${ldapConn.bindDN.toString()}`);
+  return next(new InsufficientAccessRightsError());
 }
 
 /**
@@ -523,6 +528,8 @@ async function authenticate(req, _res, next) {
       try {
         await site.authenticateAdmin(req.credentials);
         logDebug(site, "Admin bind successful");
+        // Mark the connection as authenticated so subsequent searches are authorized.
+        req.connection.ldap._ctAuthenticated = true;
         return next();
       } catch (error) {
         logError(site, "Invalid password for admin bind or auth error: ", error);
@@ -543,6 +550,8 @@ async function authenticate(req, _res, next) {
       }
     });
     logDebug(site, `Authentication successful for "${username}"`);
+    // Mark the connection as authenticated so subsequent searches are authorized.
+    req.connection.ldap._ctAuthenticated = true;
     return next();
   } catch (error) {
     if (error.response?.statusCode === 400) {
