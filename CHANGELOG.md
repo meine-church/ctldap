@@ -1,5 +1,11 @@
 # Changelog
 
+### 3.2.3
+- Root DSE now advertises the real configured naming context(s) (`o=<site>`) instead of
+  `o=undefined`. The Root DSE is queried with an empty base DN, so deriving `namingContexts`
+  from the request produced `o=undefined`, which clients (Synology DSM) then used as the base
+  DN for lookups — breaking user resolution / login.
+
 ### 3.2.2
 - Fixed mixed-case attributes (`uidNumber`, `gidNumber`, `memberUid`, `objectClass`,
   `objectClasses`, `attributeTypes`, `subschemaSubentry`, …) being stripped from search

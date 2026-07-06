@@ -637,14 +637,15 @@ server.search('cn=subschema', lowerCaseRequestedAttributes, (req, res) => {
 
 // Search implementation for basic search for Directory Information Tree and the LDAP Root DSE
 server.search('', lowerCaseRequestedAttributes, (req, res) => {
-  // noinspection JSUnresolvedVariable
-  logDebug({ name: req.dn.o }, "Empty request, return directory information");
-  // noinspection JSUnresolvedVariable
+  logDebug({ name: 'root DSE' }, "Empty request, return directory information");
   const obj = {
     "attributes": {
       "objectClass": ["top", "OpenLDAProotDSE"],
       "subschemaSubentry": ["cn=subschema"],
-      "namingContexts": `o=${req.dn.o}`,
+      // Advertise the actual configured naming context(s). The Root DSE is queried with an empty
+      // base DN, so req.dn has no "o" component; deriving it from the request yields "o=undefined"
+      // and clients (Synology DSM) would use that bogus base DN for user/group lookups.
+      "namingContexts": config.sites.map((s) => `o=${s.name}`),
       // DSM speaks LDAPv3. Deliberately advertise no supportedControl (e.g. paged results),
       // so the client requests the full result set in one response instead of paging.
       "supportedLDAPVersion": ["3"],
