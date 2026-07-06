@@ -72,6 +72,16 @@ const server = ldapjs.createServer(options);
 
 const USERS_KEY = 'users', GROUPS_KEY = 'groups', RAW_DATA_KEY = 'rawData';
 
+// Synology DSM places external-LDAP users/groups in the numeric ID range 1000000-2097151 and
+// ignores entries outside it (lower IDs are treated as reserved system accounts). Offset the
+// ChurchTools IDs into that band so DSM accepts them with its "UID/GID shift" option left OFF.
+// See https://kb.synology.com/en-us/DSM/tutorial/UID_GID_reserved_by_Synology
+const POSIX_ID_BASE = 1000000;
+// Fixed primary group that every user's gidNumber points to (implicit POSIX primary group).
+// The base value itself collides with no real group, since ChurchTools IDs start at 1.
+const PRIMARY_GID = POSIX_ID_BASE;
+const PRIMARY_GROUP_CN = "churchtools-users";
+
 /**
  * Retrieves data from cache as a Promise or refreshes the data with the provided (async) factory.
  * @param {object} site - The site for which to query the cache
@@ -273,6 +283,10 @@ function requestUsers(req, _res, next) {
           displayName: `${p['firstName']} ${p['lastName']}`,
           id,
           uid: cn,
+          // POSIX numeric IDs as strings, offset into Synology's external-LDAP range (1000000-2097151).
+          // Strings avoid the case-insensitive filter matcher calling .toLowerCase() on a number.
+          uidNumber: String(POSIX_ID_BASE + Number(id)),
+          gidNumber: String(PRIMARY_GID),
           nsUniqueId: `u${id}`,
           givenName: p['firstName'],
           street: p['street'],
@@ -285,11 +299,16 @@ function requestUsers(req, _res, next) {
           mail: email,
           // POSIX: posixAccount lists homeDirectory as MUST; synthesize a stable path from the username.
           homeDirectory: `/home/${cn}`,
+          // loginShell is MAY; provide a sane default. gecos is intentionally omitted: RFC2307 defines it
+          // as IA5 (ASCII), which would be violated by names containing umlauts.
+          loginShell: "/bin/sh",
           objectClass: [
+            'top',
             'person',
+            'organizationalPerson',
+            'inetOrgPerson',
             'CTPerson',
             // POSIX: nss-ldap clients (e.g. Synology DSM) require posixAccount to recognize login users.
-            // uidNumber/gidNumber are mapped client-side from the exposed `id` attribute.
             'posixAccount',
             // Map special CT field names of associated groups to the LDAP objectClass names defined in configuration.
             ...(p2g[id] || [])
@@ -337,9 +356,8 @@ function requestGroups(req, _res, next) {
       const cn = g['name'];
       const info = g['information'];
       const groupType = groupTypes[info['groupTypeId']];
-      const objectClasses = ["group", "CTGroup" + groupType.charAt(0).toUpperCase() + groupType.slice(1),
+      const objectClasses = ["top", "group", "CTGroup" + groupType.charAt(0).toUpperCase() + groupType.slice(1),
         // POSIX: nss-ldap clients (e.g. Synology DSM) require posixGroup to resolve groups.
-        // gidNumber is mapped client-side from the exposed `id` attribute.
         "posixGroup",
         // Map observed special CT field names to the LDAP objectClass names defined in configuration.
         ...g.specialClasses.map((key) => site.specialGroupMappings[key]['groupClass'])];
@@ -350,6 +368,8 @@ function requestGroups(req, _res, next) {
           displayname: g['name'],
           id,
           nsUniqueId: `g${id}`,
+          // POSIX numeric group ID as string, offset into Synology's external-LDAP range (1000000-2097151).
+          gidNumber: String(POSIX_ID_BASE + Number(id)),
           objectClass: objectClasses,
           uniqueMember: (g2p[id] || []).map((pid) => personMap[pid].dn),
           // RFC2307 group membership: nss-ldap clients (e.g. Synology) resolve members
@@ -357,6 +377,20 @@ function requestGroups(req, _res, next) {
           memberUid: (g2p[id] || []).map((pid) => personMap[pid]['cmsUserId'])
         }
       };
+    });
+    // Synthetic POSIX primary group that every user's gidNumber points to. Gives DSM a resolvable
+    // primary group without inventing per-user private groups; supplementary CT groups still resolve
+    // via memberUid on their own entries.
+    newCache.push({
+      dn: site.compatTransform(site.fnGroupDn(PRIMARY_GROUP_CN)),
+      attributes: {
+        cn: PRIMARY_GROUP_CN,
+        displayname: "ChurchTools Users",
+        id: "0",
+        nsUniqueId: "g0",
+        gidNumber: String(PRIMARY_GID),
+        objectClass: ["top", "posixGroup"]
+      }
     });
     logDebug(site, () => `Updated groups: ${newCache.length}`);
     return newCache;
@@ -568,6 +602,9 @@ server.search('', (req, res) => {
       "objectClass": ["top", "OpenLDAProotDSE"],
       "subschemaSubentry": ["cn=subschema"],
       "namingContexts": `o=${req.dn.o}`,
+      // DSM speaks LDAPv3. Deliberately advertise no supportedControl (e.g. paged results),
+      // so the client requests the full result set in one response instead of paging.
+      "supportedLDAPVersion": ["3"],
     },
     "dn": "",
   };

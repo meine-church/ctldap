@@ -1,5 +1,18 @@
 # Changelog
 
+### 3.2.0
+- Emit real RFC2307 POSIX attributes so Synology DSM works with its *Standard* profile
+  (no custom attribute mapping needed):
+  - Users: `uidNumber`/`gidNumber` (as strings), `loginShell`, full standard objectClass
+    chain (`top`/`person`/`organizationalPerson`/`inetOrgPerson`).
+  - Groups: `gidNumber`, added `top` to the objectClass list.
+  - Numeric IDs are offset by `1000000` into Synology's external-LDAP ID range
+    (1000000–2097151); DSM's "UID/GID shift" must stay **off**.
+- Added a synthetic `churchtools-users` posixGroup as the shared POSIX primary group
+  that every user's `gidNumber` references.
+- Root DSE now advertises `supportedLDAPVersion: 3`.
+- `gecos` is intentionally not emitted (RFC2307 IA5/ASCII constraint vs. umlaut names).
+
 ### 3.1.5
 - Added a `cn=subschema` search route that serves the RFC2307 `attributeTypes` and
   `objectClasses` definitions referenced by the Root DSE `subschemaSubentry`. Without
