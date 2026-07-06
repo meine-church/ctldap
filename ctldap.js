@@ -343,7 +343,10 @@ function requestGroups(req, _res, next) {
           id,
           nsUniqueId: `g${id}`,
           objectClass: objectClasses,
-          uniqueMember: (g2p[id] || []).map((pid) => personMap[pid].dn)
+          uniqueMember: (g2p[id] || []).map((pid) => personMap[pid].dn),
+          // RFC2307 group membership: nss-ldap clients (e.g. Synology) resolve members
+          // via memberUid (bare username), not uniqueMember/DNs.
+          memberUid: (g2p[id] || []).map((pid) => personMap[pid]['cmsUserId'])
         }
       };
     });

@@ -1,5 +1,9 @@
 # Changelog
 
+### 3.1.3
+- Added `memberUid` attribute (bare usernames) to group objects for RFC2307 / nss-ldap
+  compatibility (e.g. Synology DSM). `uniqueMember` is preserved unchanged.
+
 ### 3.1.2
 - Changed crypto algorithms to `@node-rs/{argon2,bcrypt}`
 - Minor version updates
