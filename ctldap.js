@@ -328,7 +328,8 @@ function requestUsers(req, _res, next) {
         attributes: {
           cn,
           displayname: "LDAP Administrator",
-          id: 0,
+          // String, like every other entry's id: filter matching calls .toLowerCase() on the value.
+          id: "0",
           uid: cn,
           nsUniqueId: "u0",
           givenName: "LDAP Administrator",

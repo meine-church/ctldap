@@ -1,5 +1,11 @@
 # Changelog
 
+### 3.2.5
+- Fixed a server crash (`v?.toLowerCase is not a function`) when a client sends an equality
+  filter on an attribute whose value is a number (e.g. `(id=483)` matched against the virtual
+  admin user, whose `id` was the number `0`). The case-insensitive equality matcher now coerces
+  values to string, and the admin user's `id` is emitted as a string like every other entry.
+
 ### 3.2.4
 - Searches are now authorized for any successfully authenticated connection, not just the admin
   bind. Clients like Synology DSM bind as the user and then search (to resolve the user's own
