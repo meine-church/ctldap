@@ -1,5 +1,12 @@
 # Changelog
 
+### 3.1.5
+- Added a `cn=subschema` search route that serves the RFC2307 `attributeTypes` and
+  `objectClasses` definitions referenced by the Root DSE `subschemaSubentry`. Without
+  it, schema-validating clients (Synology DSM) reject the server (`ldap_server_not_support`).
+- Added `homeDirectory` (`/home/<uid>`) to user entries to satisfy the `posixAccount`
+  MUST constraint.
+
 ### 3.1.4
 - Added `posixAccount` objectClass to users and `posixGroup` to groups for POSIX /
   nss-ldap compatibility (Synology DSM requires these for the domain join test).

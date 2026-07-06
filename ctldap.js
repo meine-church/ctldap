@@ -283,6 +283,8 @@ function requestUsers(req, _res, next) {
           sn: p['lastName'],
           email,
           mail: email,
+          // POSIX: posixAccount lists homeDirectory as MUST; synthesize a stable path from the username.
+          homeDirectory: `/home/${cn}`,
           objectClass: [
             'person',
             'CTPerson',
@@ -525,6 +527,36 @@ config.sites.forEach((site) => {
     return next();
   }, requestUsers, requestGroups, sendUsers, sendGroups, endSuccess);
 });
+
+// Subschema subentry: DSM follows subschemaSubentry from the Root DSE and requires
+// objectClasses + attributeTypes definitions here, otherwise it rejects the server.
+server.search('cn=subschema', (req, res) => {
+  const obj = {
+    dn: 'cn=subschema',
+    attributes: {
+      objectClass: ['top', 'subentry', 'subschema', 'extensibleObject'],
+      cn: 'subschema',
+      // Minimal RFC2307 set. OIDs are the standard ones, copy verbatim.
+      attributeTypes: [
+        "( 0.9.2342.19200300.100.1.1 NAME 'uid' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )",
+        "( 1.3.6.1.1.1.1.0 NAME 'uidNumber' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+        "( 1.3.6.1.1.1.1.1 NAME 'gidNumber' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+        "( 1.3.6.1.1.1.1.12 NAME 'memberUid' EQUALITY caseExactIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 )",
+        "( 1.3.6.1.1.1.1.2 NAME 'gecos' EQUALITY caseIgnoreIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )",
+        "( 1.3.6.1.1.1.1.3 NAME 'homeDirectory' EQUALITY caseExactIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )",
+        "( 1.3.6.1.1.1.1.4 NAME 'loginShell' EQUALITY caseExactIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )"
+      ],
+      objectClasses: [
+        "( 1.3.6.1.1.1.2.0 NAME 'posixAccount' SUP top AUXILIARY MUST ( cn $ uid $ uidNumber $ gidNumber $ homeDirectory ) MAY ( userPassword $ loginShell $ gecos $ description ) )",
+        "( 1.3.6.1.1.1.2.2 NAME 'posixGroup' SUP top STRUCTURAL MUST ( cn $ gidNumber ) MAY ( userPassword $ memberUid $ description ) )"
+      ]
+    }
+  };
+  if (req.filter.matches(obj.attributes, false)) {
+    res.send(obj);
+  }
+  res.end();
+}, endSuccess);
 
 // Search implementation for basic search for Directory Information Tree and the LDAP Root DSE
 server.search('', (req, res) => {
