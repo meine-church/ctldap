@@ -425,6 +425,37 @@ function searchLogging(req, _res, next) {
 }
 
 /**
+ * Works around an ldapjs bug in SearchResponse.send(): it compares the client's requested
+ * attribute list (kept in the client's original case) against lower-cased entry attribute names,
+ * so any mixed-case attribute (uidNumber, gidNumber, memberUid, objectClass, objectClasses,
+ * attributeTypes, subschemaSubentry, ...) is stripped from the response whenever a client
+ * requests it by name in non-lowercase form (as nss-ldap clients like Synology DSM do).
+ * Lower-casing the requested list makes the comparison effectively case-insensitive. This is safe:
+ * LDAP attribute descriptors are case-insensitive, and the returned attribute *names* are taken
+ * from the entry itself, not from this list.
+ * @param {object} req - Request object
+ * @param {object} res - Response object
+ * @param {function} next - Next handler function of filter chain
+ */
+function lowerCaseRequestedAttributes(req, res, next) {
+  const lowerInPlace = (arr) => {
+    if (Array.isArray(arr)) {
+      for (let i = 0; i < arr.length; i++) {
+        if (typeof arr[i] === "string") {
+          arr[i] = arr[i].toLowerCase();
+        }
+      }
+    }
+  };
+  lowerInPlace(req.attributes);
+  // res.attributes is what SearchResponse.send() actually consults; it may be a separate array.
+  if (res && res.attributes !== req.attributes) {
+    lowerInPlace(res.attributes);
+  }
+  return next();
+}
+
+/**
  * Evaluates req.usersPromise and sends matching elements to the client.
  * @param {object} req - Request object
  * @param {object} res - Response object
@@ -535,7 +566,7 @@ config.sites.forEach((site) => {
   server.search(`ou=users,o=${site.name}`, (req, _res, next) => {
     req.site = site;
     next();
-  }, searchLogging, authorize, (req, _res, next) => {
+  }, searchLogging, authorize, lowerCaseRequestedAttributes, (req, _res, next) => {
     logDebug(site, "Search for users");
     req.checkAll = req.scopeName !== "base" && req.dn.length === 2;
     return next();
@@ -545,7 +576,7 @@ config.sites.forEach((site) => {
   server.search(`ou=groups,o=${site.name}`, (req, _res, next) => {
     req.site = site;
     next();
-  }, searchLogging, authorize, (req, _res, next) => {
+  }, searchLogging, authorize, lowerCaseRequestedAttributes, (req, _res, next) => {
     logDebug(site, "Search for groups");
     req.checkAll = req.scopeName !== "base" && req.dn.length === 2;
     return next();
@@ -555,7 +586,7 @@ config.sites.forEach((site) => {
   server.search(`o=${site.name}`, (req, _res, next) => {
     req.site = site;
     next();
-  }, searchLogging, authorize, (req, _res, next) => {
+  }, searchLogging, authorize, lowerCaseRequestedAttributes, (req, _res, next) => {
     logDebug(site, "Search for users and groups combined");
     req.checkAll = req.scopeName === "subtree";
     return next();
@@ -567,7 +598,7 @@ config.sites.forEach((site) => {
 // ("get support schema failed", ldap_server_not_support). The schema is self-contained:
 // every attribute/objectClass referenced in a MUST/MAY/SUP clause is also defined here, so
 // strict client-side parsers (Synology DSM, built on OpenLDAP libs) accept it.
-server.search('cn=subschema', (req, res) => {
+server.search('cn=subschema', lowerCaseRequestedAttributes, (req, res) => {
   logDebug({ name: 'subschema' }, () =>
       `Subschema request, scope: ${req.scopeName}, filter: ${req.filter.toString()}, ` +
       `attributes: ${JSON.stringify(req.attributes)}`);
@@ -605,7 +636,7 @@ server.search('cn=subschema', (req, res) => {
 }, endSuccess);
 
 // Search implementation for basic search for Directory Information Tree and the LDAP Root DSE
-server.search('', (req, res) => {
+server.search('', lowerCaseRequestedAttributes, (req, res) => {
   // noinspection JSUnresolvedVariable
   logDebug({ name: req.dn.o }, "Empty request, return directory information");
   // noinspection JSUnresolvedVariable

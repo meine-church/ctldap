@@ -1,5 +1,14 @@
 # Changelog
 
+### 3.2.2
+- Fixed mixed-case attributes (`uidNumber`, `gidNumber`, `memberUid`, `objectClass`,
+  `objectClasses`, `attributeTypes`, `subschemaSubentry`, …) being stripped from search
+  responses. ldapjs's `SearchResponse.send()` compares the client's requested attribute list
+  (original case) against lower-cased entry attribute names, so clients that request these RFC
+  names in camelCase (nss-ldap / Synology DSM) received empty entries and an empty schema. A
+  middleware now lower-cases the requested-attribute list, making the comparison
+  case-insensitive. This was the root cause of the DSM join failure.
+
 ### 3.2.1
 - Made the `cn=subschema` entry self-contained: every attribute/objectClass referenced in a
   MUST/MAY/SUP clause (`top`, `objectClass`, `cn`, `userPassword`, `description`) is now also
