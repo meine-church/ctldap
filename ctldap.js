@@ -563,15 +563,24 @@ config.sites.forEach((site) => {
 });
 
 // Subschema subentry: DSM follows subschemaSubentry from the Root DSE and requires
-// objectClasses + attributeTypes definitions here, otherwise it rejects the server.
+// objectClasses + attributeTypes definitions here, otherwise it rejects the server
+// ("get support schema failed", ldap_server_not_support). The schema is self-contained:
+// every attribute/objectClass referenced in a MUST/MAY/SUP clause is also defined here, so
+// strict client-side parsers (Synology DSM, built on OpenLDAP libs) accept it.
 server.search('cn=subschema', (req, res) => {
+  logDebug({ name: 'subschema' }, () =>
+      `Subschema request, scope: ${req.scopeName}, filter: ${req.filter.toString()}, ` +
+      `attributes: ${JSON.stringify(req.attributes)}`);
   const obj = {
     dn: 'cn=subschema',
     attributes: {
-      objectClass: ['top', 'subentry', 'subschema', 'extensibleObject'],
+      objectClass: ['top', 'subentry', 'subschema', 'extensibleObject', 'ldapSubEntry'],
       cn: 'subschema',
-      // Minimal RFC2307 set. OIDs are the standard ones, copy verbatim.
       attributeTypes: [
+        "( 2.5.4.0 NAME 'objectClass' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )",
+        "( 2.5.4.3 NAME 'cn' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )",
+        "( 2.5.4.13 NAME 'description' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )",
+        "( 2.5.4.35 NAME 'userPassword' EQUALITY octetStringMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.40 )",
         "( 0.9.2342.19200300.100.1.1 NAME 'uid' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )",
         "( 1.3.6.1.1.1.1.0 NAME 'uidNumber' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
         "( 1.3.6.1.1.1.1.1 NAME 'gidNumber' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
@@ -581,6 +590,7 @@ server.search('cn=subschema', (req, res) => {
         "( 1.3.6.1.1.1.1.4 NAME 'loginShell' EQUALITY caseExactIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )"
       ],
       objectClasses: [
+        "( 2.5.6.0 NAME 'top' ABSTRACT MUST objectClass )",
         "( 1.3.6.1.1.1.2.0 NAME 'posixAccount' SUP top AUXILIARY MUST ( cn $ uid $ uidNumber $ gidNumber $ homeDirectory ) MAY ( userPassword $ loginShell $ gecos $ description ) )",
         "( 1.3.6.1.1.1.2.2 NAME 'posixGroup' SUP top STRUCTURAL MUST ( cn $ gidNumber ) MAY ( userPassword $ memberUid $ description ) )"
       ]
@@ -588,6 +598,8 @@ server.search('cn=subschema', (req, res) => {
   };
   if (req.filter.matches(obj.attributes, false)) {
     res.send(obj);
+  } else {
+    logDebug({ name: 'subschema' }, () => `Subschema filter did not match, sending no entry: ${req.filter.toString()}`);
   }
   res.end();
 }, endSuccess);

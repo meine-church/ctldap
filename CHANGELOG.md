@@ -1,5 +1,12 @@
 # Changelog
 
+### 3.2.1
+- Made the `cn=subschema` entry self-contained: every attribute/objectClass referenced in a
+  MUST/MAY/SUP clause (`top`, `objectClass`, `cn`, `userPassword`, `description`) is now also
+  defined, so strict client-side parsers (Synology DSM) no longer fail with
+  "get support schema failed" / `ldap_server_not_support`.
+- Added debug logging to the subschema handler (filter + requested attributes).
+
 ### 3.2.0
 - Emit real RFC2307 POSIX attributes so Synology DSM works with its *Standard* profile
   (no custom attribute mapping needed):
