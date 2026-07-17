@@ -187,7 +187,7 @@ async function fetchPersons(site) {
   logDebug(site, "fetchPersons done");
   const personMap = {};
   data.forEach((p) => {
-    if (p['invitationStatus'] === "accepted")  && p['cmsUserId'] && p['cmsUserId'].trim() !== "") {
+    if (p['invitationStatus'] === "accepted" && p['cmsUserId'] && p['cmsUserId'].trim() !== "") {
       personMap[p['id']] = p;
       p.dn = site.compatTransform(site.fnUserDn(p['cmsUserId']));
     }
