@@ -29,9 +29,16 @@ export class CtldapSite {
         this.dnLowerCase = CtldapConfig.asOptionalBool(site.dnLowerCase);
         this.emailLowerCase = CtldapConfig.asOptionalBool(site.emailLowerCase);
         this.emailsUnique = CtldapConfig.asOptionalBool(site.emailsUnique);
+        // SMB/samba support, optional per site with fallback to the main config.
+        const smbEnabled = CtldapConfig.asOptionalBool(site.smbEnabled);
+        this.smbEnabled = smbEnabled === undefined ? config.smbEnabled : smbEnabled;
+        // Samba matches the sambaDomain entry against its (uppercase) workgroup name.
+        this.smbDomainName = (site.smbDomainName || config.smbDomainName).toUpperCase();
+        this.smbSidBase = site.smbSidBase || config.smbSidBase;
         this.name = name;
         this.fnUserDn = (cn) => ldapEscape.dn`cn=${cn},ou=users,o=${name}`;
         this.fnGroupDn = (cn) => ldapEscape.dn`cn=${cn},ou=groups,o=${name}`;
+        this.fnSmbDomainDn = (domain) => ldapEscape.dn`sambaDomainName=${domain},o=${name}`;
         // Let us keep cookies, which may improve CT API performance.
         // We have to use a pool of CookieJars in order to avoid ChurchTools HTTP 403 bugs.
         const cookieJars = []

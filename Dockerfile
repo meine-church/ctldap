@@ -5,6 +5,9 @@ WORKDIR /app
 RUN chown node:node /app
 USER node
 
+# Writable data dir (SMB NT hash store); mount a volume here to survive container recreation
+RUN mkdir data
+
 COPY --chown=node:node package.json .
 COPY --chown=node:node yarn.lock .
 COPY --chown=node:node .yarnrc.yml .
@@ -28,5 +31,9 @@ ENV LDAP_PORT 1389
 ENV CT_URI https://mysite.church.tools/
 ENV API_TOKEN ""
 ENV CACHE_LIFETIME_MS 300000
+ENV SMB_ENABLED false
+ENV SMB_DOMAIN_NAME WORKGROUP
+ENV SMB_STORE_FILE ./data/smb-store.json
+ENV SMB_SID_BASE ""
 
 CMD ["node", "ctldap.js"]

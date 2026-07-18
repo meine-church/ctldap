@@ -10,6 +10,9 @@ services:
       - ldap
     env_file:
       - ./.env
+    volumes:
+      # Persists the SMB NT hash store (data/smb-store.json) across container recreation
+      - ctldap-data:/app/data
 
   test:
     build: test
@@ -27,3 +30,6 @@ services:
 
 networks:
   ldap:
+
+volumes:
+  ctldap-data:

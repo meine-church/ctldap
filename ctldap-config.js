@@ -35,6 +35,11 @@ export class CtldapConfig {
         this.ldapCertFilename = config.ldapCertFilename;
         this.ldapKeyFilename = config.ldapKeyFilename;
         this.ldapBaseDn = config.ldapBaseDn;
+        // SMB/samba support (NT hash capture on bind + samba attributes)
+        this.smbEnabled = CtldapConfig.asOptionalBool(config.smbEnabled) || false;
+        this.smbDomainName = config.smbDomainName || "WORKGROUP";
+        this.smbSidBase = config.smbSidBase;
+        this.smbStoreFile = config.smbStoreFile || "./data/smb-store.json";
         // Configure sites
         const sites = yaml.sites || {};
         // If ldapBaseDn is set, create a site from the global config properties.

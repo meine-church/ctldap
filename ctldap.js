@@ -9,6 +9,7 @@
 import fs from "fs";
 import ldapjs from "ldapjs";
 import { CtldapConfig } from "./ctldap-config.js";
+import { SmbStore, ntHash, NO_HASH } from "./ctldap-smb.js";
 import { patchLdapjsFilters } from "./ldapjs-filter-overrides.js";
 const { InsufficientAccessRightsError, InvalidCredentialsError, OtherError, parseDN } = ldapjs;
 
@@ -81,6 +82,14 @@ const POSIX_ID_BASE = 1000000;
 // The base value itself collides with no real group, since ChurchTools IDs start at 1.
 const PRIMARY_GID = POSIX_ID_BASE;
 const PRIMARY_GROUP_CN = "churchtools-users";
+
+// SMB/samba support: ChurchTools cannot provide the NT hash required for SMB/NTLM, so it is
+// captured on each successful LDAP bind with a plaintext password (see authenticate()) and
+// persisted here. User/group entries then carry samba attributes for clients like Synology DSM.
+const smbStore = new SmbStore(config.smbStoreFile, (msg, error) => logError({ name: "smb store" }, msg, error));
+// Samba's default algorithmic RID mapping (rid base 1000): uid*2+1000 for users, gid*2+1001 for groups.
+const smbUserRid = (uidNumber) => uidNumber * 2 + 1000;
+const smbGroupRid = (gidNumber) => gidNumber * 2 + 1001;
 
 /**
  * Retrieves data from cache as a Promise or refreshes the data with the provided (async) factory.
@@ -273,51 +282,65 @@ function requestUsers(req, _res, next) {
   const site = req.site;
   req.usersPromise = getCached(site, USERS_KEY, async () => {
     const { p2g, personMap, groupMap } = await fetchAll(site);
+    const smbSid = site.smbEnabled ? smbStore.getSiteSid(site) : null;
     let newCache = Object.entries(personMap).map(([id, p]) => {
       const cn = p['cmsUserId'];
       const email = site.compatTransformEmail(p['email']);
-      return {
-        dn: p.dn,
-        attributes: {
-          cn,
-          displayName: `${p['firstName']} ${p['lastName']}`,
-          id,
-          uid: cn,
-          // POSIX numeric IDs as strings, offset into Synology's external-LDAP range (1000000-2097151).
-          // Strings avoid the case-insensitive filter matcher calling .toLowerCase() on a number.
-          uidNumber: String(POSIX_ID_BASE + Number(id)),
-          gidNumber: String(PRIMARY_GID),
-          nsUniqueId: `u${id}`,
-          givenName: p['firstName'],
-          street: p['street'],
-          telephoneMobile: p['mobile'],
-          telephoneHome: p['phonePrivate'],
-          postalCode: p['zip'],
-          l: p['city'],
-          sn: p['lastName'],
-          email,
-          mail: email,
-          // POSIX: posixAccount lists homeDirectory as MUST; synthesize a stable path from the username.
-          homeDirectory: `/home/${cn}`,
-          // loginShell is MAY; provide a sane default. gecos is intentionally omitted: RFC2307 defines it
-          // as IA5 (ASCII), which would be violated by names containing umlauts.
-          loginShell: "/bin/sh",
-          objectClass: [
-            'top',
-            'person',
-            'organizationalPerson',
-            'inetOrgPerson',
-            'CTPerson',
-            // POSIX: nss-ldap clients (e.g. Synology DSM) require posixAccount to recognize login users.
-            'posixAccount',
-            // Map special CT field names of associated groups to the LDAP objectClass names defined in configuration.
-            ...(p2g[id] || [])
-                .flatMap((gid) => groupMap[gid].specialClasses)
-                .map((key) => site.specialGroupMappings[key]['personClass'])
-          ],
-          memberOf: (p2g[id] || []).map((gid) => groupMap[gid].dn)
-        }
+      const uidNumber = POSIX_ID_BASE + Number(id);
+      const attributes = {
+        cn,
+        displayName: `${p['firstName']} ${p['lastName']}`,
+        id,
+        uid: cn,
+        // POSIX numeric IDs as strings, offset into Synology's external-LDAP range (1000000-2097151).
+        // Strings avoid the case-insensitive filter matcher calling .toLowerCase() on a number.
+        uidNumber: String(uidNumber),
+        gidNumber: String(PRIMARY_GID),
+        nsUniqueId: `u${id}`,
+        givenName: p['firstName'],
+        street: p['street'],
+        telephoneMobile: p['mobile'],
+        telephoneHome: p['phonePrivate'],
+        postalCode: p['zip'],
+        l: p['city'],
+        sn: p['lastName'],
+        email,
+        mail: email,
+        // POSIX: posixAccount lists homeDirectory as MUST; synthesize a stable path from the username.
+        homeDirectory: `/home/${cn}`,
+        // loginShell is MAY; provide a sane default. gecos is intentionally omitted: RFC2307 defines it
+        // as IA5 (ASCII), which would be violated by names containing umlauts.
+        loginShell: "/bin/sh",
+        objectClass: [
+          'top',
+          'person',
+          'organizationalPerson',
+          'inetOrgPerson',
+          'CTPerson',
+          // POSIX: nss-ldap clients (e.g. Synology DSM) require posixAccount to recognize login users.
+          'posixAccount',
+          // Map special CT field names of associated groups to the LDAP objectClass names defined in configuration.
+          ...(p2g[id] || [])
+              .flatMap((gid) => groupMap[gid].specialClasses)
+              .map((key) => site.specialGroupMappings[key]['personClass'])
+        ],
+        memberOf: (p2g[id] || []).map((gid) => groupMap[gid].dn)
       };
+      if (smbSid) {
+        const smb = smbStore.getUserSmb(site, cn);
+        attributes.objectClass.push('sambaSamAccount', 'sambaIdmapEntry');
+        attributes.sambaSID = `${smbSid}-${smbUserRid(uidNumber)}`;
+        attributes.sambaPrimaryGroupSID = `${smbSid}-${smbGroupRid(PRIMARY_GID)}`;
+        attributes.sambaAcctFlags = "[U          ]";
+        // Until the user's first bind with a password, no NT hash is known; the placeholder
+        // makes SMB authentication fail (instead of serving no sambaNTPassword at all).
+        attributes.sambaNTPassword = smb ? smb.ntHash : NO_HASH;
+        attributes.sambaPwdLastSet = String(smb ? smb.lastSet : 0);
+        // LM hashes are obsolete; the placeholder disables LM authentication.
+        attributes.sambaLMPassword = NO_HASH;
+        attributes.sambaPasswordHistory = "0".repeat(64);
+      }
+      return { dn: p.dn, attributes };
     });
     newCache = site.uniqueEmails(newCache);
     // Virtual admin user
@@ -353,6 +376,17 @@ function requestGroups(req, _res, next) {
   const site = req.site;
   req.groupsPromise = getCached(site, GROUPS_KEY, async () => {
     const { groupTypes, g2p, personMap, groupMap } = await fetchAll(site);
+    const smbSid = site.smbEnabled ? smbStore.getSiteSid(site) : null;
+    // Attaches the samba group attributes to a group's attributes, if SMB support is enabled.
+    const withSmbAttributes = (attributes) => {
+      if (smbSid) {
+        attributes.objectClass.push("sambaGroupMapping", "sambaIdmapEntry");
+        attributes.sambaSID = `${smbSid}-${smbGroupRid(Number(attributes.gidNumber))}`;
+        // 2 = domain group
+        attributes.sambaGroupType = "2";
+      }
+      return attributes;
+    };
     const newCache = Object.entries(groupMap).map(([id, g]) => {
       const cn = g['name'];
       const info = g['information'];
@@ -364,7 +398,7 @@ function requestGroups(req, _res, next) {
         ...g.specialClasses.map((key) => site.specialGroupMappings[key]['groupClass'])];
       return {
         dn: g.dn,
-        attributes: {
+        attributes: withSmbAttributes({
           cn,
           displayname: g['name'],
           id,
@@ -376,7 +410,7 @@ function requestGroups(req, _res, next) {
           // RFC2307 group membership: nss-ldap clients (e.g. Synology) resolve members
           // via memberUid (bare username), not uniqueMember/DNs.
           memberUid: (g2p[id] || []).map((pid) => personMap[pid]['cmsUserId'])
-        }
+        })
       };
     });
     // Synthetic POSIX primary group that every user's gidNumber points to. Gives DSM a resolvable
@@ -384,14 +418,14 @@ function requestGroups(req, _res, next) {
     // via memberUid on their own entries.
     newCache.push({
       dn: site.compatTransform(site.fnGroupDn(PRIMARY_GROUP_CN)),
-      attributes: {
+      attributes: withSmbAttributes({
         cn: PRIMARY_GROUP_CN,
         displayname: "ChurchTools Users",
         id: "0",
         nsUniqueId: "g0",
         gidNumber: String(PRIMARY_GID),
         objectClass: ["top", "posixGroup"]
-      }
+      })
     });
     logDebug(site, () => `Updated groups: ${newCache.length}`);
     return newCache;
@@ -504,6 +538,25 @@ function sendGroups(req, res, next) {
 }
 
 /**
+ * Sends the site's sambaDomain entry if it matches the search. Samba (e.g. on Synology DSM)
+ * looks this entry up by its workgroup name to obtain the domain SID before authenticating
+ * SMB users against their sambaNTPassword.
+ * @param {object} req - Request object
+ * @param {object} res - Response object
+ * @param {function} next - Next handler function of filter chain
+ */
+function sendDomain(req, res, next) {
+  const entry = req.site.smbDomainEntry;
+  // DN.equals() compares attribute values case-sensitively, so normalize for base-scope reads.
+  const dnMatches = () => req.dn.toString().toLowerCase() === entry.dn.toLowerCase();
+  if (entry && (req.checkAll || dnMatches()) && req.filter.matches(entry.attributes, false)) {
+    logTrace(req.site, () => `MatchDomain: ${entry.dn}`);
+    res.send(entry);
+  }
+  return next();
+}
+
+/**
  * Calls the res.end() function to finalize successful chain processing.
  * @param {object} _req - Request object
  * @param {object} res - Response object
@@ -551,6 +604,18 @@ async function authenticate(req, _res, next) {
       }
     });
     logDebug(site, `Authentication successful for "${username}"`);
+    if (site.smbEnabled) {
+      // SMB/NTLM needs the NT hash of the password, which ChurchTools cannot provide.
+      // Capture it from this successful plaintext bind and persist it for SMB clients.
+      if (smbStore.setUserHash(site, username, ntHash(req.credentials))) {
+        logDebug(site, () => `Stored new SMB NT hash for "${username}"`);
+        // Expire the users cache, so the new hash is served without waiting for the cache TTL.
+        const cached = site.CACHE[USERS_KEY];
+        if (cached) {
+          cached.time = -1;
+        }
+      }
+    }
     // Mark the connection as authenticated so subsequent searches are authorized.
     req.connection.ldap._ctAuthenticated = true;
     return next();
@@ -566,6 +631,33 @@ async function authenticate(req, _res, next) {
 }
 
 config.sites.forEach((site) => {
+  // SMB: static sambaDomain entry, served by sendDomain() for searches below "o=<site>".
+  // All values are strings, since the case-insensitive filter matchers expect string values.
+  if (site.smbEnabled) {
+    site.smbDomainEntry = {
+      dn: site.compatTransform(site.fnSmbDomainDn(site.smbDomainName)),
+      attributes: {
+        cn: site.smbDomainName,
+        sambaDomainName: site.smbDomainName,
+        sambaSID: smbStore.getSiteSid(site),
+        // Matches the RID scheme of smbUserRid()/smbGroupRid()
+        sambaAlgorithmicRidBase: "1000",
+        // Relaxed default password/lockout policies: passwords are governed by ChurchTools.
+        sambaMinPwdLength: "1",
+        sambaPwdHistoryLength: "0",
+        sambaLogonToChgPwd: "0",
+        sambaMaxPwdAge: "-1",
+        sambaMinPwdAge: "0",
+        sambaLockoutDuration: "30",
+        sambaLockoutObservationWindow: "30",
+        sambaLockoutThreshold: "0",
+        sambaForceLogoff: "-1",
+        sambaRefuseMachinePwdChange: "0",
+        objectClass: ["top", "sambaDomain"]
+      }
+    };
+  }
+
   // Login bind for user
   server.bind(`ou=users,o=${site.name}`, (req, _res, next) => {
     req.site = site;
@@ -600,7 +692,7 @@ config.sites.forEach((site) => {
     logDebug(site, "Search for users and groups combined");
     req.checkAll = req.scopeName === "subtree";
     return next();
-  }, requestUsers, requestGroups, sendUsers, sendGroups, endSuccess);
+  }, requestUsers, requestGroups, sendUsers, sendGroups, sendDomain, endSuccess);
 });
 
 // Subschema subentry: DSM follows subschemaSubentry from the Root DSE and requires
@@ -628,12 +720,39 @@ server.search('cn=subschema', lowerCaseRequestedAttributes, (req, res) => {
         "( 1.3.6.1.1.1.1.12 NAME 'memberUid' EQUALITY caseExactIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 )",
         "( 1.3.6.1.1.1.1.2 NAME 'gecos' EQUALITY caseIgnoreIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )",
         "( 1.3.6.1.1.1.1.3 NAME 'homeDirectory' EQUALITY caseExactIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )",
-        "( 1.3.6.1.1.1.1.4 NAME 'loginShell' EQUALITY caseExactIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )"
+        "( 1.3.6.1.1.1.1.4 NAME 'loginShell' EQUALITY caseExactIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )",
+        "( 2.16.840.1.113730.3.1.241 NAME 'displayName' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 SINGLE-VALUE )",
+        // Samba 3 schema subset, so clients (Synology DSM) recognize SMB/NTLM support via LDAP
+        "( 1.3.6.1.4.1.7165.2.1.20 NAME 'sambaSID' DESC 'Security ID' EQUALITY caseIgnoreIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.23 NAME 'sambaPrimaryGroupSID' DESC 'Primary Group Security ID' EQUALITY caseIgnoreIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.24 NAME 'sambaLMPassword' DESC 'LanManager Password' EQUALITY caseIgnoreIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.25 NAME 'sambaNTPassword' DESC 'MD4 hash of the unicode password' EQUALITY caseIgnoreIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.26 NAME 'sambaAcctFlags' DESC 'Account Flags' EQUALITY caseIgnoreIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.27 NAME 'sambaPwdLastSet' DESC 'Timestamp of the last password update' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.54 NAME 'sambaPasswordHistory' DESC 'Concatenated MD5 hashes of the salted NT passwords used on this account' EQUALITY caseIgnoreIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 )",
+        "( 1.3.6.1.4.1.7165.2.1.38 NAME 'sambaDomainName' DESC 'Windows NT domain to which the user belongs' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )",
+        "( 1.3.6.1.4.1.7165.2.1.19 NAME 'sambaGroupType' DESC 'NT Group Type' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.42 NAME 'sambaAlgorithmicRidBase' DESC 'Base at which the samba RID generation algorithm should operate' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.58 NAME 'sambaMinPwdLength' DESC 'Minimal password length (default: 5)' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.59 NAME 'sambaPwdHistoryLength' DESC 'Length of Password History Entries (default: 0 => off)' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.60 NAME 'sambaLogonToChgPwd' DESC 'Force Users to logon for password change (default: 0 => off, 2 => on)' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.61 NAME 'sambaMaxPwdAge' DESC 'Maximum password age, in seconds (default: -1 => never expire passwords)' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.62 NAME 'sambaMinPwdAge' DESC 'Minimum password age, in seconds (default: 0 => allow immediate password change)' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.63 NAME 'sambaLockoutDuration' DESC 'Lockout duration in minutes (default: 30, -1 => forever)' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.64 NAME 'sambaLockoutObservationWindow' DESC 'Reset time after lockout in minutes (default: 30)' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.65 NAME 'sambaLockoutThreshold' DESC 'Lockout users after bad logon attempts (default: 0 => off)' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.66 NAME 'sambaForceLogoff' DESC 'Disconnect Users outside logon hours (default: -1 => off, 0 => on)' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+        "( 1.3.6.1.4.1.7165.2.1.67 NAME 'sambaRefuseMachinePwdChange' DESC 'Allow Machine Password changes (default: 0 => off)' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )"
       ],
       objectClasses: [
         "( 2.5.6.0 NAME 'top' ABSTRACT MUST objectClass )",
         "( 1.3.6.1.1.1.2.0 NAME 'posixAccount' SUP top AUXILIARY MUST ( cn $ uid $ uidNumber $ gidNumber $ homeDirectory ) MAY ( userPassword $ loginShell $ gecos $ description ) )",
-        "( 1.3.6.1.1.1.2.2 NAME 'posixGroup' SUP top STRUCTURAL MUST ( cn $ gidNumber ) MAY ( userPassword $ memberUid $ description ) )"
+        "( 1.3.6.1.1.1.2.2 NAME 'posixGroup' SUP top STRUCTURAL MUST ( cn $ gidNumber ) MAY ( userPassword $ memberUid $ description ) )",
+        // Samba 3 schema subset (MAY lists trimmed to attributes defined above, to stay self-contained)
+        "( 1.3.6.1.4.1.7165.2.2.6 NAME 'sambaSamAccount' DESC 'Samba 3.0 Auxilary SAM Account' SUP top AUXILIARY MUST ( uid $ sambaSID ) MAY ( cn $ sambaLMPassword $ sambaNTPassword $ sambaPwdLastSet $ sambaAcctFlags $ displayName $ sambaPrimaryGroupSID $ sambaDomainName $ sambaPasswordHistory $ description ) )",
+        "( 1.3.6.1.4.1.7165.2.2.4 NAME 'sambaGroupMapping' DESC 'Samba Group Mapping' SUP top AUXILIARY MUST ( gidNumber $ sambaSID $ sambaGroupType ) MAY ( displayName $ description ) )",
+        "( 1.3.6.1.4.1.7165.2.2.11 NAME 'sambaIdmapEntry' DESC 'Mapping from a SID to an ID' SUP top AUXILIARY MUST ( sambaSID ) MAY ( uidNumber $ gidNumber ) )",
+        "( 1.3.6.1.4.1.7165.2.2.5 NAME 'sambaDomain' DESC 'Samba Domain Information' SUP top STRUCTURAL MUST ( sambaDomainName $ sambaSID ) MAY ( sambaAlgorithmicRidBase $ sambaMinPwdLength $ sambaPwdHistoryLength $ sambaLogonToChgPwd $ sambaMaxPwdAge $ sambaMinPwdAge $ sambaLockoutDuration $ sambaLockoutObservationWindow $ sambaLockoutThreshold $ sambaForceLogoff $ sambaRefuseMachinePwdChange ) )"
       ]
     }
   };

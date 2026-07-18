@@ -34,3 +34,17 @@ For such a configuration, the
 - password for initial binding is `0a1b2c3d4e5f6g7h8i9j`
 - users are found in the organizational unit `ou=users,o=churchtools`
 - groups are found in the organizational unit `ou=groups,o=churchtools`
+
+# SMB support (e.g. Synology DSM shared folders)
+SMB/NTLM authentication requires the NT hash of the user's password, which ChurchTools does not
+provide. With `SMB_ENABLED=true`, ctldap computes the NT hash on every successful LDAP bind with
+a password, persists it in `SMB_STORE_FILE` (default `./data/smb-store.json`, in Docker backed by
+the `ctldap-data` volume) and serves samba attributes (`sambaNTPassword`, `sambaSID`, ...) plus a
+`sambaDomainName` entry via LDAP.
+
+Notes:
+- Set `SMB_DOMAIN_NAME` to the SMB workgroup name of your file server (default: `WORKGROUP`).
+- Every user must **log in once** (e.g. at the DSM web GUI or any other service doing LDAP binds
+  through ctldap) before SMB access works — and once again after each ChurchTools password change.
+- The store file contains NT hashes, which are **password-equivalent** secrets: keep the
+  file/volume private and treat backups of it like a password database.

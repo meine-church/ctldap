@@ -1,5 +1,27 @@
 # Changelog
 
+### 3.3.0
+- SMB/samba support (opt-in via `SMB_ENABLED`/`smbEnabled`), so SMB shares (e.g. Synology DSM)
+  work with ChurchTools accounts. ChurchTools cannot provide the NT hash required for SMB/NTLM
+  authentication, so ctldap now computes it (MD4 over the UTF-16LE password) on every successful
+  LDAP bind with a plaintext password and persists it in a store file (`SMB_STORE_FILE`, default
+  `./data/smb-store.json`, mode 0600, docker-compose volume `ctldap-data`). Consequently, each
+  user must log in once (e.g. at the DSM web GUI) — and again after every ChurchTools password
+  change — before SMB access works.
+  - Users additionally carry `sambaSamAccount`/`sambaIdmapEntry` with `sambaSID`,
+    `sambaPrimaryGroupSID`, `sambaNTPassword`, `sambaPwdLastSet` and `sambaAcctFlags`;
+    groups carry `sambaGroupMapping`/`sambaIdmapEntry` with `sambaSID` and `sambaGroupType`.
+    RIDs follow samba's algorithmic scheme (uid\*2+1000 / gid\*2+1001, rid base 1000).
+  - A `sambaDomainName=<SMB_DOMAIN_NAME>,o=<site>` entry (default name `WORKGROUP`, must match
+    the file server's workgroup) provides the domain SID, which is generated once per site and
+    persisted (override with `SMB_SID_BASE`/`smbSidBase`).
+  - The subschema now also defines the served samba attributes/objectClasses, so strict clients
+    recognize samba schema support.
+  - The users cache is expired when a bind captures a new/changed NT hash, so SMB works right
+    after the first login instead of after the cache TTL.
+- Fixed a crash (`Cannot convert undefined or null to object`) when the optional
+  `specialGroupMappings` section is missing from the configuration.
+
 ### 3.2.5
 - Fixed a server crash (`v?.toLowerCase is not a function`) when a client sends an equality
   filter on an attribute whose value is a number (e.g. `(id=483)` matched against the virtual
