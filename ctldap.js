@@ -213,12 +213,31 @@ async function fetchPersons(site) {
   return personMap;
 }
 
+// German umlauts/ligatures cannot be stripped to their base letter, they transliterate to digraphs.
+const TRANSLIT_MAP = {
+  'ä': 'ae', 'ö': 'oe', 'ü': 'ue', 'Ä': 'Ae', 'Ö': 'Oe', 'Ü': 'Ue', 'ß': 'ss',
+  'æ': 'ae', 'Æ': 'Ae', 'ø': 'o', 'Ø': 'O', 'œ': 'oe', 'Œ': 'Oe'
+};
+
+/**
+ * Transliterates a login name to ASCII: German umlauts and ligatures via replacement table
+ * (ö→oe, ß→ss, ...), any other diacritics via Unicode decomposition (ñ→n, ç→c, é→e, ...).
+ * POSIX/nss login names must be ASCII (memberUid even has IA5 syntax by schema), and clients
+ * like Synology DSM cannot handle accounts with non-ASCII names at all.
+ * @param {string} name The login name, e.g. the ChurchTools username
+ * @return {string} The name with non-ASCII letters transliterated
+ */
+function asciiLoginName(name) {
+  return name.replace(/[äöüÄÖÜßæÆøØœŒ]/g, (c) => TRANSLIT_MAP[c])
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
 /**
  * Computes the login names (uid attribute values) of all persons, as p.uids.
- * The first value is always the ChurchTools username: clients like Synology DSM treat it as
- * the canonical account name and compose it as "<uid[0]>@<base DN>", so it must never contain
- * "@" (a full email as first value yields broken double-@ account names and breaks the DSM
- * login). It is also emitted as memberUid in group entries.
+ * The first value is always the (ASCII-transliterated) ChurchTools username: clients like
+ * Synology DSM treat it as the canonical account name and compose it as "<uid[0]>@<base DN>",
+ * so it must never contain "@" (a full email as first value yields broken double-@ account
+ * names and breaks the DSM login). It is also emitted as memberUid in group entries.
  * With emailLogin enabled, all email addresses of the person (any domain) are added as
  * additional uid values, so clients that resolve logins via (uid=...) lookups - notably
  * SMB/samba - can authenticate users by email as well. Emails shared by several persons or
@@ -228,8 +247,18 @@ async function fetchPersons(site) {
  */
 function computeUids(site, personMap) {
   const persons = Object.values(personMap);
+  // The entry DN (and cn) keeps the original ChurchTools username - binds authenticate that
+  // name against the ChurchTools API - but all login names are the transliterated username.
+  const loginCounts = {};
+  persons.forEach((p) => {
+    p.login = asciiLoginName(p['cmsUserId']);
+    const lc = p.login.toLowerCase();
+    loginCounts[lc] = (loginCounts[lc] || 0) + 1;
+  });
+  Object.entries(loginCounts).filter(([, count]) => count > 1).forEach(([name, count]) =>
+      logWarn(site, `Login name "${name}" is ambiguous after transliteration (${count} persons)!`));
   if (!site.emailLogin) {
-    persons.forEach((p) => p.uids = [p['cmsUserId']]);
+    persons.forEach((p) => p.uids = [p.login]);
     return;
   }
   // Email aliases: all emails of the person, the primary email first, deduplicated
@@ -243,10 +272,9 @@ function computeUids(site, personMap) {
       return seen.has(lc) ? false : seen.add(lc);
     }).map((e) => site.compatTransformEmail(e));
   };
-  // ChurchTools usernames are reserved names, they must stay unambiguous as well.
-  const emailCounts = {}, usernames = new Set();
+  // Login names are reserved, an email alias colliding with one must stay unambiguous as well.
+  const emailCounts = {};
   persons.forEach((p) => {
-    usernames.add(p['cmsUserId'].toLowerCase());
     p.emailAliases = emailsOf(p);
     p.emailAliases.forEach((email) => {
       const lc = email.toLowerCase();
@@ -256,9 +284,9 @@ function computeUids(site, personMap) {
   persons.forEach((p) => {
     const unique = p.emailAliases.filter((email) => {
       const lc = email.toLowerCase();
-      return emailCounts[lc] === 1 && !usernames.has(lc);
+      return emailCounts[lc] === 1 && loginCounts[lc] === undefined;
     });
-    p.uids = [p['cmsUserId'], ...unique];
+    p.uids = [p.login, ...unique];
     delete p.emailAliases;
   });
 }

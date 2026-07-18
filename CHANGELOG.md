@@ -1,5 +1,16 @@
 # Changelog
 
+### 3.5.1
+- Login names with non-ASCII characters are now transliterated: German umlauts and ligatures
+  become digraphs (`mbösiger` → `mboesiger`, ß → ss), all other diacritics are stripped to
+  their base letter (ñ → n, ç → c, é → e). POSIX login names must be ASCII (`memberUid` even
+  has IA5 syntax by schema), and Synology DSM cannot handle accounts with non-ASCII names -
+  such users were missing from DSM entirely and appeared as undecodable base64 values in
+  `memberUid`. The transliterated name is used for `uid`, `memberUid` and `homeDirectory`;
+  the entry DN (and `cn`) keeps the original ChurchTools username, so binds still
+  authenticate correctly against the ChurchTools API. A warning is logged if two usernames
+  become ambiguous after transliteration.
+
 ### 3.5.0
 - **Fixes broken DSM logins from the 3.4.x `EMAIL_LOGIN` design:** the first (canonical) `uid`
   value is the ChurchTools username again, and all email addresses of the person (any domain)
