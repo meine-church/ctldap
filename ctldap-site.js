@@ -29,6 +29,9 @@ export class CtldapSite {
         this.dnLowerCase = CtldapConfig.asOptionalBool(site.dnLowerCase);
         this.emailLowerCase = CtldapConfig.asOptionalBool(site.emailLowerCase);
         this.emailsUnique = CtldapConfig.asOptionalBool(site.emailsUnique);
+        // Email login, optional per site with fallback to the main config.
+        const emailLogin = CtldapConfig.asOptionalBool(site.emailLogin);
+        this.emailLogin = emailLogin === undefined ? config.emailLogin : emailLogin;
         // SMB/samba support, optional per site with fallback to the main config.
         const smbEnabled = CtldapConfig.asOptionalBool(site.smbEnabled);
         this.smbEnabled = smbEnabled === undefined ? config.smbEnabled : smbEnabled;

@@ -35,6 +35,13 @@ config:
   # - Get your token via "Person" > "/persons/{personId}/logintoken"
   apiToken: ${API_TOKEN}
 
+  # Use the ChurchTools email addresses as login names: the uid attribute then holds the
+  # person's email addresses (primary email first) instead of the ChurchTools username.
+  # Clients like Synology DSM resolve logins - notably SMB - via uid and treat the first value
+  # as the canonical username. Emails shared by multiple persons are dropped from all of them;
+  # persons without a (unique) email fall back to their ChurchTools username.
+  emailLogin: ${EMAIL_LOGIN:false}
+
   # SMB/samba support (e.g. for Synology DSM shared folder access via SMB):
   # ChurchTools does not provide the NT hash needed for SMB/NTLM authentication. When enabled,
   # ctldap computes it on each successful LDAP bind with a password and persists it (see smbStoreFile),
@@ -81,6 +88,7 @@ sites:
 #    ldapPassword: $argon2id$XXXXXXXXXXXXXXXXXXXX
 #    ctUri: https://XXXXXXXXXXXXXXXXXXXX.church.tools/
 #    apiToken: XXXXXXXXXXXXXXXXXXXX
+#    emailLogin: false
 #    smbEnabled: false
 #    smbDomainName: WORKGROUP
 #    smbSidBase: S-1-5-21-XXXXXXXXXX-XXXXXXXXXX-XXXXXXXXXX

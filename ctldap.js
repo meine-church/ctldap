@@ -201,7 +201,50 @@ async function fetchPersons(site) {
       p.dn = site.compatTransform(site.fnUserDn(p['cmsUserId']));
     }
   });
+  computeUids(site, personMap);
   return personMap;
+}
+
+/**
+ * Computes the login names (uid attribute values) of all persons, as p.uids.
+ * Clients like Synology DSM resolve logins - notably SMB - via the uid attribute, and treat the
+ * first value as the canonical username, which is also emitted as memberUid in group entries.
+ * With emailLogin enabled, the uids are the person's email addresses (primary email first);
+ * emails shared by several persons are dropped from all of them, so every (uid=...) lookup stays
+ * unambiguous. The ChurchTools username is only a fallback for persons without a unique email.
+ * Otherwise, the ChurchTools username is the sole uid.
+ * @param {object} site The site for which this information is requested.
+ * @param {object} personMap Map of person id to person, each person gets its "uids" property set.
+ */
+function computeUids(site, personMap) {
+  const persons = Object.values(personMap);
+  if (!site.emailLogin) {
+    persons.forEach((p) => p.uids = [p['cmsUserId']]);
+    return;
+  }
+  // All emails of a person: the primary email first, then the additional ones, deduplicated
+  const emailsOf = (p) => {
+    const seen = new Set();
+    return [p['email'], ...(p['emails'] || []).map((e) => e && e['email'])].filter((e) => {
+      if (typeof e !== "string" || e.trim() === "") {
+        return false;
+      }
+      const lc = e.toLowerCase();
+      return seen.has(lc) ? false : seen.add(lc);
+    }).map((e) => site.compatTransformEmail(e));
+  };
+  const emailCounts = {};
+  persons.forEach((p) => {
+    p.uids = emailsOf(p);
+    p.uids.forEach((e) => {
+      const lc = e.toLowerCase();
+      emailCounts[lc] = (emailCounts[lc] || 0) + 1;
+    });
+  });
+  persons.forEach((p) => {
+    const unique = p.uids.filter((e) => emailCounts[e.toLowerCase()] === 1);
+    p.uids = unique.length > 0 ? unique : [p['cmsUserId']];
+  });
 }
 
 /**
@@ -291,7 +334,8 @@ function requestUsers(req, _res, next) {
         cn,
         displayName: `${p['firstName']} ${p['lastName']}`,
         id,
-        uid: cn,
+        // The login name(s), see computeUids()
+        uid: p.uids,
         // POSIX numeric IDs as strings, offset into Synology's external-LDAP range (1000000-2097151).
         // Strings avoid the case-insensitive filter matcher calling .toLowerCase() on a number.
         uidNumber: String(uidNumber),
@@ -306,8 +350,8 @@ function requestUsers(req, _res, next) {
         sn: p['lastName'],
         email,
         mail: email,
-        // POSIX: posixAccount lists homeDirectory as MUST; synthesize a stable path from the username.
-        homeDirectory: `/home/${cn}`,
+        // POSIX: posixAccount lists homeDirectory as MUST; synthesize a stable path from the login name.
+        homeDirectory: `/home/${p.uids[0]}`,
         // loginShell is MAY; provide a sane default. gecos is intentionally omitted: RFC2307 defines it
         // as IA5 (ASCII), which would be violated by names containing umlauts.
         loginShell: "/bin/sh",
@@ -327,7 +371,10 @@ function requestUsers(req, _res, next) {
         memberOf: (p2g[id] || []).map((gid) => groupMap[gid].dn)
       };
       if (smbSid) {
-        const smb = smbStore.getUserSmb(site, cn);
+        // The NT hash is stored under the name used in the bind DN: usually the username (the
+        // cn of the entry DN), but clients may also bind with a login name (email) as cn -
+        // ChurchTools accepts email logins on its API.
+        const smb = [cn, ...p.uids].map((name) => smbStore.getUserSmb(site, name)).find(Boolean);
         attributes.objectClass.push('sambaSamAccount', 'sambaIdmapEntry');
         attributes.sambaSID = `${smbSid}-${smbUserRid(uidNumber)}`;
         attributes.sambaPrimaryGroupSID = `${smbSid}-${smbGroupRid(PRIMARY_GID)}`;
@@ -408,8 +455,9 @@ function requestGroups(req, _res, next) {
           objectClass: objectClasses,
           uniqueMember: (g2p[id] || []).map((pid) => personMap[pid].dn),
           // RFC2307 group membership: nss-ldap clients (e.g. Synology) resolve members
-          // via memberUid (bare username), not uniqueMember/DNs.
-          memberUid: (g2p[id] || []).map((pid) => personMap[pid]['cmsUserId'])
+          // via memberUid (bare username), not uniqueMember/DNs. Must be the canonical
+          // login name (first uid value), so members resolve with emailLogin enabled, too.
+          memberUid: (g2p[id] || []).map((pid) => personMap[pid].uids[0])
         })
       };
     });

@@ -1,5 +1,17 @@
 # Changelog
 
+### 3.4.0
+- Email login (opt-in via `EMAIL_LOGIN`/`emailLogin`): the `uid` attribute holds the person's
+  email addresses (primary email first) instead of the ChurchTools username. Clients like
+  Synology DSM resolve logins - notably SMB - via `uid` and treat the first value as the
+  canonical username (the DSM web login already matches the `mail` attribute by itself).
+  Group entries emit the canonical login name as `memberUid`, and `homeDirectory` is derived
+  from it as well. Emails shared by multiple persons are dropped from all of them, so every
+  `(uid=...)` lookup stays unambiguous; persons without a (unique) email fall back to their
+  ChurchTools username. The SMB NT hash lookup checks the entry's `cn` and all login names,
+  covering clients that bind with the email as `cn` (ChurchTools accepts email logins on its
+  API). Entry DNs (`cn=<username>`) are unchanged.
+
 ### 3.3.0
 - SMB/samba support (opt-in via `SMB_ENABLED`/`smbEnabled`), so SMB shares (e.g. Synology DSM)
   work with ChurchTools accounts. ChurchTools cannot provide the NT hash required for SMB/NTLM
