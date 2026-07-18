@@ -23,7 +23,9 @@ export class CtldapSite {
         // Take ldapUser from main config if not specified for site.
         this.ldapUser = site.ldapUser || config.ldapUser;
         this.ldapPassword = site.ldapPassword;
-        this.specialGroupMappings = site.specialGroupMappings;
+        // Default to no mappings: the site created from the main config passes the raw yaml value,
+        // which is undefined when the (optional) specialGroupMappings section is missing.
+        this.specialGroupMappings = site.specialGroupMappings || {};
         this.dnLowerCase = CtldapConfig.asOptionalBool(site.dnLowerCase);
         this.emailLowerCase = CtldapConfig.asOptionalBool(site.emailLowerCase);
         this.emailsUnique = CtldapConfig.asOptionalBool(site.emailsUnique);
