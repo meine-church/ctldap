@@ -35,7 +35,7 @@ export class CtldapConfig {
         this.ldapCertFilename = config.ldapCertFilename;
         this.ldapKeyFilename = config.ldapKeyFilename;
         this.ldapBaseDn = config.ldapBaseDn;
-        // Use email addresses as login names (uid), so logins happen by email (e.g. SMB)
+        // Serve email addresses as additional uid values, so logins by email work (e.g. SMB)
         this.emailLogin = CtldapConfig.asOptionalBool(config.emailLogin) || false;
         // SMB/samba support (NT hash capture on bind + samba attributes)
         this.smbEnabled = CtldapConfig.asOptionalBool(config.smbEnabled) || false;

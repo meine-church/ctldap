@@ -44,10 +44,12 @@ the `ctldap-data` volume) and serves samba attributes (`sambaNTPassword`, `samba
 
 Notes:
 - Set `SMB_DOMAIN_NAME` to the SMB workgroup name of your file server (default: `WORKGROUP`).
-- To log in with the ChurchTools email addresses instead of the username, set `EMAIL_LOGIN=true`:
-  the `uid` attribute (which SMB/samba uses to resolve login names) then holds the person's
-  email addresses, primary email first as the canonical username. Emails shared by multiple
-  persons are dropped; persons without a unique email fall back to their ChurchTools username.
+- To additionally allow logins with the ChurchTools email addresses, set `EMAIL_LOGIN=true`:
+  all emails of a person (any domain) are then served as additional values of the `uid`
+  attribute, which SMB/samba uses to resolve login names. The first `uid` value - the
+  canonical account name, from which e.g. Synology DSM composes `<username>@<base DN>` -
+  remains the ChurchTools username; it must never be an email, since an `@` inside the
+  account name breaks DSM's name resolution. Emails shared by multiple persons are dropped.
 - Every user must **log in once** (e.g. at the DSM web GUI or any other service doing LDAP binds
   through ctldap) before SMB access works — and once again after each ChurchTools password change.
 - The store file contains NT hashes, which are **password-equivalent** secrets: keep the

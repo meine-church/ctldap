@@ -35,11 +35,11 @@ config:
   # - Get your token via "Person" > "/persons/{personId}/logintoken"
   apiToken: ${API_TOKEN}
 
-  # Use the ChurchTools email addresses as login names: the uid attribute then holds the
-  # person's email addresses (primary email first) instead of the ChurchTools username.
-  # Clients like Synology DSM resolve logins - notably SMB - via uid and treat the first value
-  # as the canonical username. Emails shared by multiple persons are dropped from all of them;
-  # persons without a (unique) email fall back to their ChurchTools username.
+  # Allow logins with the ChurchTools email addresses: all emails of a person (any domain)
+  # are served as ADDITIONAL values of the uid attribute, so clients that resolve logins via
+  # (uid=...) lookups - notably SMB/samba - can authenticate users by email as well.
+  # The first uid value (the canonical account name, e.g. on Synology DSM) remains the
+  # ChurchTools username. Emails shared by multiple persons are dropped from all of them.
   emailLogin: ${EMAIL_LOGIN:false}
 
   # SMB/samba support (e.g. for Synology DSM shared folder access via SMB):

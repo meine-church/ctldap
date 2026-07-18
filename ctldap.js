@@ -215,12 +215,14 @@ async function fetchPersons(site) {
 
 /**
  * Computes the login names (uid attribute values) of all persons, as p.uids.
- * Clients like Synology DSM resolve logins - notably SMB - via the uid attribute, and treat the
- * first value as the canonical username, which is also emitted as memberUid in group entries.
- * With emailLogin enabled, the uids are the person's email addresses (primary email first);
- * emails shared by several persons are dropped from all of them, so every (uid=...) lookup stays
- * unambiguous. The ChurchTools username is only a fallback for persons without a unique email.
- * Otherwise, the ChurchTools username is the sole uid.
+ * The first value is always the ChurchTools username: clients like Synology DSM treat it as
+ * the canonical account name and compose it as "<uid[0]>@<base DN>", so it must never contain
+ * "@" (a full email as first value yields broken double-@ account names and breaks the DSM
+ * login). It is also emitted as memberUid in group entries.
+ * With emailLogin enabled, all email addresses of the person (any domain) are added as
+ * additional uid values, so clients that resolve logins via (uid=...) lookups - notably
+ * SMB/samba - can authenticate users by email as well. Emails shared by several persons or
+ * colliding with another person's username are dropped, so every lookup stays unambiguous.
  * @param {object} site The site for which this information is requested.
  * @param {object} personMap Map of person id to person, each person gets its "uids" property set.
  */
@@ -230,7 +232,7 @@ function computeUids(site, personMap) {
     persons.forEach((p) => p.uids = [p['cmsUserId']]);
     return;
   }
-  // All emails of a person: the primary email first, then the additional ones, deduplicated
+  // Email aliases: all emails of the person, the primary email first, deduplicated
   const emailsOf = (p) => {
     const seen = new Set();
     return [p['email'], ...(p['emails'] || []).map((e) => e && e['email'])].filter((e) => {
@@ -241,17 +243,23 @@ function computeUids(site, personMap) {
       return seen.has(lc) ? false : seen.add(lc);
     }).map((e) => site.compatTransformEmail(e));
   };
-  const emailCounts = {};
+  // ChurchTools usernames are reserved names, they must stay unambiguous as well.
+  const emailCounts = {}, usernames = new Set();
   persons.forEach((p) => {
-    p.uids = emailsOf(p);
-    p.uids.forEach((e) => {
-      const lc = e.toLowerCase();
+    usernames.add(p['cmsUserId'].toLowerCase());
+    p.emailAliases = emailsOf(p);
+    p.emailAliases.forEach((email) => {
+      const lc = email.toLowerCase();
       emailCounts[lc] = (emailCounts[lc] || 0) + 1;
     });
   });
   persons.forEach((p) => {
-    const unique = p.uids.filter((e) => emailCounts[e.toLowerCase()] === 1);
-    p.uids = unique.length > 0 ? unique : [p['cmsUserId']];
+    const unique = p.emailAliases.filter((email) => {
+      const lc = email.toLowerCase();
+      return emailCounts[lc] === 1 && !usernames.has(lc);
+    });
+    p.uids = [p['cmsUserId'], ...unique];
+    delete p.emailAliases;
   });
 }
 
@@ -380,9 +388,10 @@ function requestUsers(req, _res, next) {
       };
       if (smbSid) {
         // The NT hash is stored under the name used in the bind DN: usually the username (the
-        // cn of the entry DN), but clients may also bind with a login name (email) as cn -
+        // cn of the entry DN), but clients may also bind with an email alias as cn -
         // ChurchTools accepts email logins on its API.
-        const smb = [cn, ...p.uids].map((name) => smbStore.getUserSmb(site, name)).find(Boolean);
+        const smb = [...new Set([cn, ...p.uids])]
+            .map((name) => smbStore.getUserSmb(site, name)).find(Boolean);
         attributes.objectClass.push('sambaSamAccount', 'sambaIdmapEntry');
         attributes.sambaSID = `${smbSid}-${smbUserRid(uidNumber)}`;
         attributes.sambaPrimaryGroupSID = `${smbSid}-${smbGroupRid(PRIMARY_GID)}`;

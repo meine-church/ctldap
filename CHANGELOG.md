@@ -1,5 +1,16 @@
 # Changelog
 
+### 3.5.0
+- **Fixes broken DSM logins from the 3.4.x `EMAIL_LOGIN` design:** the first (canonical) `uid`
+  value is the ChurchTools username again, and all email addresses of the person (any domain)
+  are served as *additional* `uid` values. Synology DSM composes its account names as
+  `<uid[0]>@<base DN>`, so 3.4.x - which served the email as first value - produced broken
+  double-@ account names (`user@maildomain@basedn`) and broke the DSM web login. Account
+  names, `memberUid` and `homeDirectory` are back to the pre-3.4 values (username-based);
+  the email addresses remain resolvable for clients that look logins up via `(uid=...)`
+  (SMB/samba), which allows SMB logins by email with arbitrary email domains.
+  Emails shared by multiple persons are dropped from all of them.
+
 ### 3.4.1
 - Important events are now logged even without `DEBUG` via a new, always-on INFO level:
   server start (incl. version and listen address), the configuration summary of each site,
