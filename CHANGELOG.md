@@ -1,5 +1,13 @@
 # Changelog
 
+### 3.4.1
+- Important events are now logged even without `DEBUG` via a new, always-on INFO level:
+  server start (incl. version and listen address), the configuration summary of each site,
+  completed user/group syncs from ChurchTools ("Updated users/groups: N"), successful user
+  authentications, and stored/updated SMB NT hashes. Detailed request/cache/API logging
+  remains behind `DEBUG`/`TRACE`.
+- Fixed a broken debug log call (missing site argument) in the admin bind fallback path.
+
 ### 3.4.0
 - Email login (opt-in via `EMAIL_LOGIN`/`emailLogin`): the `uid` attribute holds the person's
   email addresses (primary email first) instead of the ChurchTools username. Clients like

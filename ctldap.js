@@ -50,6 +50,14 @@ export const logDebug = (site, msg) => {
   }
 }
 
+export const logInfo = (site, msg) => {
+  // For lazy evaluation
+  if (typeof msg === "function") {
+    msg = msg()
+  }
+  console.log(`${getIsoDate()} [INFO]  ${site.name} - ${msg}`);
+}
+
 export const logWarn = (site, msg) => {
   console.warn(`${getIsoDate()} [WARN]  ${site.name} - ${msg}`);
 }
@@ -407,7 +415,8 @@ function requestUsers(req, _res, next) {
         }
       });
     }
-    logDebug(site, () => `Updated users: ${newCache.length}`);
+    // Info level: this marks a completed user sync from ChurchTools (cache refresh)
+    logInfo(site, () => `Updated users: ${newCache.length}`);
     return newCache;
   });
   return next();
@@ -475,7 +484,8 @@ function requestGroups(req, _res, next) {
         objectClass: ["top", "posixGroup"]
       })
     });
-    logDebug(site, () => `Updated groups: ${newCache.length}`);
+    // Info level: this marks a completed group sync from ChurchTools (cache refresh)
+    logInfo(site, () => `Updated groups: ${newCache.length}`);
     return newCache;
   });
   return next();
@@ -638,7 +648,7 @@ async function authenticate(req, _res, next) {
         return next(new InvalidCredentialsError());
       }
     } else {
-      logDebug("ldapPassword is undefined, trying ChurchTools authentication...")
+      logDebug(site, "ldapPassword is undefined, trying ChurchTools authentication...")
     }
   } else {
     logDebug(site, () => `Bind user with DN "${req.dn}"`);
@@ -651,12 +661,12 @@ async function authenticate(req, _res, next) {
         "password": req.credentials
       }
     });
-    logDebug(site, `Authentication successful for "${username}"`);
+    logInfo(site, `Authentication successful for "${username}"`);
     if (site.smbEnabled) {
       // SMB/NTLM needs the NT hash of the password, which ChurchTools cannot provide.
       // Capture it from this successful plaintext bind and persist it for SMB clients.
       if (smbStore.setUserHash(site, username, ntHash(req.credentials))) {
-        logDebug(site, () => `Stored new SMB NT hash for "${username}"`);
+        logInfo(site, () => `Stored new SMB NT hash for "${username}"`);
         // Expire the users cache, so the new hash is served without waiting for the cache TTL.
         const cached = site.CACHE[USERS_KEY];
         if (cached) {
@@ -679,6 +689,10 @@ async function authenticate(req, _res, next) {
 }
 
 config.sites.forEach((site) => {
+  logInfo(site, () => `Site configured: base DN "o=${site.name}", ` +
+      `email login ${site.emailLogin ? "enabled" : "disabled"}, ` +
+      `SMB ${site.smbEnabled ? `enabled (domain "${site.smbDomainName}")` : "disabled"}`);
+
   // SMB: static sambaDomain entry, served by sendDomain() for searches below "o=<site>".
   // All values are strings, since the case-insensitive filter matchers expect string values.
   if (site.smbEnabled) {
@@ -839,5 +853,6 @@ server.search('', lowerCaseRequestedAttributes, (req, res) => {
 
 // Start LDAP server
 server.listen(parseInt(config.ldapPort), config.ldapIp, () => {
-  logDebug({ name: 'root logger' }, `ChurchTools-LDAP-Wrapper listening @ ${server.url}`);
+  const version = JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), { encoding: "utf8" }))['version'];
+  logInfo({ name: 'root logger' }, `ChurchTools-LDAP-Wrapper ${version} listening @ ${server.url}`);
 });
