@@ -1,5 +1,14 @@
 # Changelog
 
+### 3.6.1
+- Fixed the recursive member collection failing against real ChurchTools instances:
+  `GET /groups/hierarchies` validates its `limit` parameter with a maximum of 200, so the
+  page size of 500 was rejected with HTTP 400 and the group sync failed with an unhelpful
+  "AggregateError: All promises were rejected".
+- Error logging now unwraps nested error details: got HTTP errors log status, request URL
+  and the (truncated) ChurchTools response body - which carries the actual API error
+  message - and AggregateErrors (e.g. from `Promise.any`) log all their contained causes.
+
 ### 3.6.0
 - Tag-based group sync filter (opt-in via `GROUP_SYNC_TAG_IDS`/`groupSyncTagIds`, a comma-
   separated list of ChurchTools group tag IDs): when set, only groups carrying at least one

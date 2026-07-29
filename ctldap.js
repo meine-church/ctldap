@@ -62,10 +62,31 @@ export const logWarn = (site, msg) => {
   console.warn(`${getIsoDate()} [WARN]  ${site.name} - ${msg}`);
 }
 
+/**
+ * Logs an error with all nested details: got HTTP errors carry the API response (status and
+ * body with the actual ChurchTools error message), AggregateErrors (e.g. from Promise.any in
+ * fetchAllPaginated) carry the real causes in their "errors" property - without unwrapping
+ * them, the log only shows a useless "All promises were rejected".
+ * @param error The error to log
+ * @param {string} indent Indentation, grows with nesting depth
+ */
+const logErrorDetails = (error, indent) => {
+  console.error(indent + error.stack.replaceAll("\n", `\n${indent}`));
+  if (error.response !== undefined) {
+    const body = typeof error.response.body === "string"
+        ? error.response.body : JSON.stringify(error.response.body);
+    console.error(`${indent}HTTP ${error.response.statusCode} from ${error.response.requestUrl}: ` +
+        `${body ? body.slice(0, 500) : "<empty body>"}`);
+  }
+  if (Array.isArray(error.errors)) {
+    error.errors.forEach((nested) => logErrorDetails(nested, `${indent}  `));
+  }
+};
+
 export const logError = (site, msg, error) => {
   console.error(`${getIsoDate()} [ERROR] ${site.name} - ${msg}`);
   if (error !== undefined) {
-    console.error(error.stack);
+    logErrorDetails(error, "");
   }
 }
 
@@ -340,7 +361,8 @@ async function fetchGroups(site) {
  * @param {object} site The site for which this information is requested.
  */
 async function fetchHierarchies(site) {
-  const data = await fetchAllPaginated(site, 'groups/hierarchies', { limit: 500 });
+  // The hierarchies endpoint validates its limit parameter with a maximum of 200
+  const data = await fetchAllPaginated(site, 'groups/hierarchies', { limit: 200 });
   logDebug(site, "fetchHierarchies done");
   const childrenMap = {};
   data.forEach((h) => childrenMap[h['groupId']] = h['children'] || []);
