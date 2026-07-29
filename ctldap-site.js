@@ -35,9 +35,15 @@ export class CtldapSite {
         // SMB/samba support, optional per site with fallback to the main config.
         const smbEnabled = CtldapConfig.asOptionalBool(site.smbEnabled);
         this.smbEnabled = smbEnabled === undefined ? config.smbEnabled : smbEnabled;
+        // Tag-based group sync filter and recursive member collection,
+        // optional per site with fallback to the main config.
+        this.groupSyncTagIds = site.groupSyncTagIds === undefined
+            ? config.groupSyncTagIds : CtldapConfig.asTagIdList(site.groupSyncTagIds);
+        this.recursiveMembersTagId = site.recursiveMembersTagId === undefined
+            ? config.recursiveMembersTagId : CtldapConfig.asTagId(site.recursiveMembersTagId);
         // Samba matches the sambaDomain entry against its (uppercase) workgroup name.
         this.smbDomainName = (site.smbDomainName || config.smbDomainName).toUpperCase();
-        this.smbSidBase = site.smbSidBase || config.smbSidBase;
+        this.smbSidBase = CtldapConfig.asOptionalString(site.smbSidBase) || config.smbSidBase;
         this.name = name;
         this.fnUserDn = (cn) => ldapEscape.dn`cn=${cn},ou=users,o=${name}`;
         this.fnGroupDn = (cn) => ldapEscape.dn`cn=${cn},ou=groups,o=${name}`;

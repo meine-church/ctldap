@@ -55,7 +55,24 @@ config:
   # keep this file/volume private! (In Docker, mount a volume at /app/data to survive restarts.)
   smbStoreFile: ${SMB_STORE_FILE:./data/smb-store.json}
   # Optional: fixed samba domain SID base ("S-1-5-21-x-y-z"). Auto-generated and persisted if empty.
-  smbSidBase: ${SMB_SID_BASE:}
+  # NOTE: "none" (or an empty env value) means "not set". A ${VAR:} placeholder with an empty
+  # default would never be substituted by yaml-env-defaults, not even with the variable set!
+  smbSidBase: ${SMB_SID_BASE:none}
+
+  # Optional: Comma-separated list of ChurchTools group tag IDs to restrict the group sync.
+  # If set, only groups carrying at least one of these tags are provided as LDAP groups
+  # (memberships in all other groups are not visible via LDAP). Leave empty to sync all groups.
+  # Users are not filtered by this option. The available tags (with their IDs) can be listed
+  # via GET https://<your-instance>/api/tags/group
+  # "none" (or an empty env value) disables the filter, see the smbSidBase NOTE.
+  groupSyncTagIds: ${GROUP_SYNC_TAG_IDS:none}
+  # Optional: A single ChurchTools group tag ID enabling recursive member collection.
+  # A group carrying this tag provides not only its direct members, but the members of all its
+  # subgroups (the entire subtree of the ChurchTools group hierarchy) as LDAP group members.
+  # Useful for clients without nested-group support, e.g. Synology DSM shared folder permissions.
+  # Subgroups contribute their members even if they are excluded by groupSyncTagIds themselves.
+  # "none" (or an empty env value) disables the recursive member collection.
+  recursiveMembersTagId: ${RECURSIVE_MEMBERS_TAG_ID:none}
 
   # This map specifies special group properties, typically yes/no-columns, that, when found in the group information,
   # are translated to additional LDAP object classes that will be attached to the group and user objects.
@@ -92,6 +109,8 @@ sites:
 #    smbEnabled: false
 #    smbDomainName: WORKGROUP
 #    smbSidBase: S-1-5-21-XXXXXXXXXX-XXXXXXXXXX-XXXXXXXXXX
+#    groupSyncTagIds: 241,242
+#    recursiveMembersTagId: 244
 #    specialGroupMappings:
 #      nextcloud:
 #        groupClass: NextCloudGroup

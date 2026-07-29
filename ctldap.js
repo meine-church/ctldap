@@ -157,18 +157,19 @@ async function fetchAllPaginated(site, apiPath, searchParams= {}) {
   };
   // Get pagination meta cache
   const pCache = site.CACHE.pagination;
-  // Assume the same number of pages as last time, default to 1
-  const assumedPages = pCache[site] || 1;
+  // Assume the same number of pages as last time (per API path), default to 1
+  const assumedPages = pCache[apiPath] || 1;
   // Fetch assumed number of pages
   const promises = range(1, assumedPages + 1).map(fetchPage);
   // Await first result
   const firstResult = await Promise.any(promises);
   // Check first result for completeness, and fix up results and pagination cache if necessary
-  const nPages = firstResult['meta']['pagination']['lastPage'];
+  // (endpoints without pagination metadata deliver everything at once)
+  const nPages = firstResult['meta']?.['pagination']?.['lastPage'] ?? 1;
   if (nPages !== assumedPages) {
     logDebug(site, () => `Assumed ${assumedPages} page(s) of data for /api/${apiPath}, but had to load ${nPages}.`);
     // Update meta cache
-    pCache[site] = nPages;
+    pCache[apiPath] = nPages;
     // Fetch remaining pages, if any
     if (nPages > assumedPages) {
       promises.push(...range(assumedPages + 1, nPages + 1).map(fetchPage));
@@ -293,24 +294,57 @@ function computeUids(site, personMap) {
 
 /**
  * Fetches all groups and computes dn values and "special classes" for custom LDAP objectClass attributes.
+ * When tag-based features are configured, the groups' tags are included in the fetch and evaluated:
+ * "synced" marks groups passing the sync filter (only those become LDAP groups), "recursiveMembers"
+ * marks groups that collect the members of their entire subgroup subtree (see fetchAll()).
+ * Groups filtered out stay in the map (synced=false), since their memberships must remain
+ * available for the recursive member collection of parent groups.
  * @param {object} site The site for which this information is requested.
  */
 async function fetchGroups(site) {
-  const data = await fetchAllPaginated(site, 'groups', { limit: 100 });
+  const searchParams = { limit: 100 };
+  // Tag data is only needed (and requested) when one of the tag-based features is configured.
+  if (site.groupSyncTagIds.length > 0 || site.recursiveMembersTagId !== undefined) {
+    searchParams['include[]'] = 'tags';
+  }
+  const data = await fetchAllPaginated(site, 'groups', searchParams);
   logDebug(site, "fetchGroups done");
   const groupMap = {};
   const sgmKeys = Object.keys(site.specialGroupMappings);
   data.forEach((g) => {
+    const tagIds = (g['tags'] || []).map((t) => Number(t['id']));
     // Strip some irrelevant information
     delete g['settings'];
     delete g['roles'];
+    delete g['tags'];
+    g.synced = site.groupSyncTagIds.length === 0 || site.groupSyncTagIds.some((id) => tagIds.includes(id));
+    g.recursiveMembers = site.recursiveMembersTagId !== undefined && tagIds.includes(site.recursiveMembersTagId);
     // Pre-compute the "distinguished name" of this group for LDAP
     g.dn = site.compatTransform(site.fnGroupDn(g['name']));
     const info = g['information'];
     g.specialClasses = sgmKeys.filter((k) => info[k])
     groupMap[g['id']] = g;
   });
+  if (site.groupSyncTagIds.length > 0) {
+    const synced = Object.values(groupMap).filter((g) => g.synced).length;
+    // Info level: makes the effect of the sync filter visible without DEBUG
+    logInfo(site, () => `Group sync filter (tag IDs [${site.groupSyncTagIds.join(", ")}]): ` +
+        `${synced} of ${data.length} groups match`);
+  }
   return groupMap;
+}
+
+/**
+ * Fetches all group hierarchies and returns a map of group ID to direct child group IDs.
+ * Only called when the recursive member collection is configured (recursiveMembersTagId).
+ * @param {object} site The site for which this information is requested.
+ */
+async function fetchHierarchies(site) {
+  const data = await fetchAllPaginated(site, 'groups/hierarchies', { limit: 500 });
+  logDebug(site, "fetchHierarchies done");
+  const childrenMap = {};
+  data.forEach((h) => childrenMap[h['groupId']] = h['children'] || []);
+  return childrenMap;
 }
 
 /**
@@ -328,32 +362,76 @@ async function fetchGroupTypes(site) {
 
 /**
  * Collects all required group and user information and computes group-to-users and user-to-groups mappings.
+ * Only groups that passed the tag-based sync filter (synced=true) become LDAP groups. Groups tagged
+ * for recursive member collection include the members of their entire subgroup subtree - subgroups
+ * contribute their members even when they are excluded by the sync filter themselves.
  * @param {object} site The site for which this information is requested.
  */
 async function fetchAll(site) {
   return await getCached(site, RAW_DATA_KEY, async () => {
-    const [personMap, groupMap, memberships, groupTypes] = await Promise.all([
-      fetchPersons(site), fetchGroups(site), fetchMemberships(site), fetchGroupTypes(site)
+    const [personMap, allGroupMap, memberships, groupTypes, childrenMap] = await Promise.all([
+      fetchPersons(site), fetchGroups(site), fetchMemberships(site), fetchGroupTypes(site),
+      // The group hierarchy is only needed for the recursive member collection.
+      site.recursiveMembersTagId === undefined ? {} : fetchHierarchies(site)
     ]);
-    // Create membership mappings
-    const g2p = {}, p2g = {};
+    // Direct members per group, over ALL groups: subgroups excluded by the sync filter still
+    // contribute their members to recursively collecting parent groups.
+    const directMembers = {};
     memberships.forEach((m) => {
       const { personId, groupId } = m;
       // Only map persons/groups that have not been filtered
-      if ((personId in personMap) && (groupId in groupMap)) {
-        // Entry for group-to-persons-mappings
-        if (!g2p[groupId]) {
-          g2p[groupId] = [personId];
+      if ((personId in personMap) && (groupId in allGroupMap)) {
+        if (!directMembers[groupId]) {
+          directMembers[groupId] = [personId];
         } else {
-          g2p[groupId].push(personId);
-        }
-        // Entry for person-to-groups-mappings
-        if (!p2g[personId]) {
-          p2g[personId] = [groupId];
-        } else {
-          p2g[personId].push(groupId);
+          directMembers[groupId].push(personId);
         }
       }
+    });
+    // Collects the members of a group's entire subtree (the group itself, its subgroups,
+    // their subgroups, ...). The visited set guards against hierarchy cycles.
+    const collectSubtreeMembers = (rootId) => {
+      const members = new Set();
+      const visited = new Set();
+      const stack = [rootId];
+      while (stack.length > 0) {
+        const gid = stack.pop();
+        if (visited.has(gid)) {
+          continue;
+        }
+        visited.add(gid);
+        (directMembers[gid] || []).forEach((pid) => members.add(pid));
+        stack.push(...(childrenMap[gid] || []));
+      }
+      return [...members];
+    };
+    // Only groups that passed the tag-based sync filter become LDAP groups.
+    const groupMap = {};
+    Object.entries(allGroupMap).forEach(([id, g]) => {
+      if (g.synced) {
+        groupMap[id] = g;
+      }
+    });
+    // Create membership mappings
+    const g2p = {}, p2g = {};
+    Object.entries(groupMap).forEach(([id, g]) => {
+      const personIds = g.recursiveMembers ? collectSubtreeMembers(Number(id)) : (directMembers[id] || []);
+      if (g.recursiveMembers) {
+        logDebug(site, () => `Recursive members of group "${g['name']}": ` +
+            `${personIds.length} total, ${(directMembers[id] || []).length} direct`);
+      }
+      if (personIds.length > 0) {
+        // Entry for group-to-persons-mappings
+        g2p[id] = personIds;
+      }
+      // Entries for person-to-groups-mappings
+      personIds.forEach((personId) => {
+        if (!p2g[personId]) {
+          p2g[personId] = [id];
+        } else {
+          p2g[personId].push(id);
+        }
+      });
     });
     return { groupTypes, g2p, p2g, personMap, groupMap };
   });
@@ -728,7 +806,11 @@ async function authenticate(req, _res, next) {
 config.sites.forEach((site) => {
   logInfo(site, () => `Site configured: base DN "o=${site.name}", ` +
       `email login ${site.emailLogin ? "enabled" : "disabled"}, ` +
-      `SMB ${site.smbEnabled ? `enabled (domain "${site.smbDomainName}")` : "disabled"}`);
+      `SMB ${site.smbEnabled ? `enabled (domain "${site.smbDomainName}")` : "disabled"}, ` +
+      `group sync filter ${site.groupSyncTagIds.length > 0
+          ? `tag IDs [${site.groupSyncTagIds.join(", ")}]` : "disabled"}, ` +
+      `recursive members ${site.recursiveMembersTagId !== undefined
+          ? `tag ID ${site.recursiveMembersTagId}` : "disabled"}`);
 
   // SMB: static sambaDomain entry, served by sendDomain() for searches below "o=<site>".
   // All values are strings, since the case-insensitive filter matchers expect string values.

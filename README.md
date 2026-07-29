@@ -35,6 +35,21 @@ For such a configuration, the
 - users are found in the organizational unit `ou=users,o=churchtools`
 - groups are found in the organizational unit `ou=groups,o=churchtools`
 
+# Restricting synced groups & recursive members (group tags)
+By default, all groups of the supported group types are provided as LDAP groups. Two optional
+env vars restrict/extend this via ChurchTools group tags (list your tags and their IDs via
+`GET https://<your-instance>/api/tags/group`):
+
+- `GROUP_SYNC_TAG_IDS`: comma-separated list of group tag IDs. If set, only groups carrying at
+  least one of these tags become LDAP groups; memberships in all other groups are not visible
+  via LDAP. Users are not filtered by this option.
+- `RECURSIVE_MEMBERS_TAG_ID`: a single group tag ID. A group carrying this tag provides not
+  only its direct members, but the members of all its subgroups (the entire subtree of the
+  ChurchTools group hierarchy) as LDAP group members. This is useful for clients without
+  nested-group support, e.g. for Synology DSM shared folder permissions. Subgroups contribute
+  their members even if they are excluded by `GROUP_SYNC_TAG_IDS` themselves - they just don't
+  appear as own LDAP groups.
+
 # SMB support (e.g. Synology DSM shared folders)
 SMB/NTLM authentication requires the NT hash of the user's password, which ChurchTools does not
 provide. With `SMB_ENABLED=true`, ctldap computes the NT hash on every successful LDAP bind with

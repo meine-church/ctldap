@@ -1,5 +1,30 @@
 # Changelog
 
+### 3.6.0
+- Tag-based group sync filter (opt-in via `GROUP_SYNC_TAG_IDS`/`groupSyncTagIds`, a comma-
+  separated list of ChurchTools group tag IDs): when set, only groups carrying at least one
+  of these tags are provided as LDAP groups; all other groups (and memberships in them)
+  disappear from LDAP. Users are not filtered. The tag data is fetched together with the
+  regular group sync (`include[]=tags`), so no additional requests are needed.
+- Recursive member collection (opt-in via `RECURSIVE_MEMBERS_TAG_ID`/`recursiveMembersTagId`,
+  a single group tag ID): a group carrying this tag provides not only its direct members, but
+  the members of all its subgroups - the entire subtree of the ChurchTools group hierarchy
+  (`GET /groups/hierarchies`, cycle-safe) - as LDAP group members. The collected persons are
+  served consistently in the group's `uniqueMember`/`memberUid` and in their own `memberOf`.
+  Useful for clients without nested-group support, e.g. Synology DSM shared folder permissions.
+  Subgroups contribute their members even when the sync filter excludes them; they only appear
+  as own LDAP groups when they match the filter themselves.
+- Both options are also configurable per site. Invalid (non-numeric) tag IDs abort startup
+  instead of silently syncing all groups.
+- The pagination helper now keys its page-count cache by API path (previously one shared entry
+  for all endpoints) and tolerates endpoints without pagination metadata.
+- Fixed `SMB_SID_BASE` never being applied: `yaml-env-defaults` does not substitute `${VAR:}`
+  placeholders with an *empty* default at all (not even when the variable is set), so the
+  sambaDomain entry served the literal string `${SMB_SID_BASE:}` as its SID base. Optional
+  env vars now use the explicit default `none` (empty env values are treated as unset, too).
+  NOTE: If SMB is enabled and no `SMB_SID_BASE` is set, the served domain SID changes with
+  this version - once to the generated-and-persisted one (or set `SMB_SID_BASE` explicitly).
+
 ### 3.5.1
 - Login names with non-ASCII characters are now transliterated: German umlauts and ligatures
   become digraphs (`mbösiger` → `mboesiger`, ß → ss), all other diacritics are stripped to
