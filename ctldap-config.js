@@ -39,6 +39,10 @@ export class CtldapConfig {
         this.emailLogin = CtldapConfig.asOptionalBool(config.emailLogin) || false;
         // Tag-based group sync filter: only groups carrying one of these tags become LDAP groups.
         this.groupSyncTagIds = CtldapConfig.asTagIdList(config.groupSyncTagIds);
+        // Groups carrying one of these tags become ADDITIONAL leaders-only LDAP groups
+        // (only members with a leader role), named with the leadersOnlyNameSuffix.
+        this.groupSyncTagIdsLeadersOnly = CtldapConfig.asTagIdList(config.groupSyncTagIdsLeadersOnly);
+        this.leadersOnlyNameSuffix = CtldapConfig.asOptionalString(config.leadersOnlyNameSuffix) || "(LeiterIn)";
         // Groups carrying this tag include the members of all their subgroups as LDAP members.
         this.recursiveMembersTagId = CtldapConfig.asTagId(config.recursiveMembersTagId);
         // SMB/samba support (NT hash capture on bind + samba attributes)
@@ -57,6 +61,8 @@ export class CtldapConfig {
                 apiToken: config.apiToken,
                 specialGroupMappings: config.specialGroupMappings,
                 groupSyncTagIds: config.groupSyncTagIds,
+                groupSyncTagIdsLeadersOnly: config.groupSyncTagIdsLeadersOnly,
+                leadersOnlyNameSuffix: config.leadersOnlyNameSuffix,
                 recursiveMembersTagId: config.recursiveMembersTagId
             }
         }

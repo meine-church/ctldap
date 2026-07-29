@@ -39,6 +39,10 @@ export class CtldapSite {
         // optional per site with fallback to the main config.
         this.groupSyncTagIds = site.groupSyncTagIds === undefined
             ? config.groupSyncTagIds : CtldapConfig.asTagIdList(site.groupSyncTagIds);
+        this.groupSyncTagIdsLeadersOnly = site.groupSyncTagIdsLeadersOnly === undefined
+            ? config.groupSyncTagIdsLeadersOnly : CtldapConfig.asTagIdList(site.groupSyncTagIdsLeadersOnly);
+        this.leadersOnlyNameSuffix =
+            CtldapConfig.asOptionalString(site.leadersOnlyNameSuffix) || config.leadersOnlyNameSuffix;
         this.recursiveMembersTagId = site.recursiveMembersTagId === undefined
             ? config.recursiveMembersTagId : CtldapConfig.asTagId(site.recursiveMembersTagId);
         // Samba matches the sambaDomain entry against its (uppercase) workgroup name.

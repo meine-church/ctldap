@@ -1,5 +1,17 @@
 # Changelog
 
+### 3.7.0
+- Leaders-only groups (opt-in via `GROUP_SYNC_TAG_IDS_LEADERSONLY`/`groupSyncTagIdsLeadersOnly`,
+  a comma-separated list of ChurchTools group tag IDs): a group carrying one of these tags is
+  provided as an *additional* LDAP group containing only the members with a leader role
+  (group type roles marked as "leader" in the ChurchTools master data). The extra group is
+  named after the original group plus a configurable suffix
+  (`GROUP_SYNC_LEADERS_ONLY_SUFFIX`/`leadersOnlyNameSuffix`, default `(LeiterIn)`), e.g.
+  `Worship` → `Worship (LeiterIn)`. A group may carry a `GROUP_SYNC_TAG_IDS` tag (regular
+  group), a leaders-only tag (leaders-only group only) or both (both LDAP groups are provided).
+  Groups tagged for recursive member collection provide the leaders of their entire subgroup
+  subtree. Both options are also configurable per site.
+
 ### 3.6.1
 - Fixed the recursive member collection failing against real ChurchTools instances:
   `GET /groups/hierarchies` validates its `limit` parameter with a maximum of 200, so the

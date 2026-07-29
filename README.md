@@ -43,6 +43,14 @@ env vars restrict/extend this via ChurchTools group tags (list your tags and the
 - `GROUP_SYNC_TAG_IDS`: comma-separated list of group tag IDs. If set, only groups carrying at
   least one of these tags become LDAP groups; memberships in all other groups are not visible
   via LDAP. Users are not filtered by this option.
+- `GROUP_SYNC_TAG_IDS_LEADERSONLY`: comma-separated list of group tag IDs. A group carrying one
+  of these tags is provided as an *additional* LDAP group containing only the members with a
+  leader role (ChurchTools group type roles marked as "leader"). The leaders-only group is named
+  after the original group plus the suffix from `GROUP_SYNC_LEADERS_ONLY_SUFFIX` (default
+  `(LeiterIn)`, separated by a space), e.g. `Worship` → `Worship (LeiterIn)`. A group may carry
+  a `GROUP_SYNC_TAG_IDS` tag (regular group), one of these tags (leaders-only group only) or
+  both tags (both LDAP groups are provided). A group tagged for recursive member collection
+  provides the leaders of its entire subgroup subtree in its leaders-only group.
 - `RECURSIVE_MEMBERS_TAG_ID`: a single group tag ID. A group carrying this tag provides not
   only its direct members, but the members of all its subgroups (the entire subtree of the
   ChurchTools group hierarchy) as LDAP group members. This is useful for clients without

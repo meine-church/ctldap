@@ -111,6 +111,10 @@ const POSIX_ID_BASE = 1000000;
 // The base value itself collides with no real group, since ChurchTools IDs start at 1.
 const PRIMARY_GID = POSIX_ID_BASE;
 const PRIMARY_GROUP_CN = "churchtools-users";
+// Synthetic leaders-only groups (see groupSyncTagIdsLeadersOnly) get the source group's ID plus
+// this offset as their own ID, keeping gidNumber/nsUniqueId unique while staying well inside
+// Synology's accepted band (POSIX_ID_BASE + offset + <CT group ID> <= 2097151).
+const LEADERS_ONLY_ID_OFFSET = 500000;
 
 // SMB/samba support: ChurchTools cannot provide the NT hash required for SMB/NTLM, so it is
 // captured on each successful LDAP bind with a plaintext password (see authenticate()) and
@@ -316,7 +320,8 @@ function computeUids(site, personMap) {
 /**
  * Fetches all groups and computes dn values and "special classes" for custom LDAP objectClass attributes.
  * When tag-based features are configured, the groups' tags are included in the fetch and evaluated:
- * "synced" marks groups passing the sync filter (only those become LDAP groups), "recursiveMembers"
+ * "synced" marks groups passing the sync filter (only those become LDAP groups), "leadersOnly"
+ * marks groups that additionally become a leaders-only LDAP group, and "recursiveMembers"
  * marks groups that collect the members of their entire subgroup subtree (see fetchAll()).
  * Groups filtered out stay in the map (synced=false), since their memberships must remain
  * available for the recursive member collection of parent groups.
@@ -325,20 +330,26 @@ function computeUids(site, personMap) {
 async function fetchGroups(site) {
   const searchParams = { limit: 100 };
   // Tag data is only needed (and requested) when one of the tag-based features is configured.
-  if (site.groupSyncTagIds.length > 0 || site.recursiveMembersTagId !== undefined) {
+  if (site.groupSyncTagIds.length > 0 || site.groupSyncTagIdsLeadersOnly.length > 0
+      || site.recursiveMembersTagId !== undefined) {
     searchParams['include[]'] = 'tags';
   }
   const data = await fetchAllPaginated(site, 'groups', searchParams);
   logDebug(site, "fetchGroups done");
   const groupMap = {};
   const sgmKeys = Object.keys(site.specialGroupMappings);
+  // With any sync tag list configured, a group's tags decide what it becomes: a regular LDAP
+  // group (groupSyncTagIds), an additional leaders-only LDAP group (groupSyncTagIdsLeadersOnly),
+  // or both. Without any list, all groups sync regularly.
+  const syncFilterActive = site.groupSyncTagIds.length > 0 || site.groupSyncTagIdsLeadersOnly.length > 0;
   data.forEach((g) => {
     const tagIds = (g['tags'] || []).map((t) => Number(t['id']));
     // Strip some irrelevant information
     delete g['settings'];
     delete g['roles'];
     delete g['tags'];
-    g.synced = site.groupSyncTagIds.length === 0 || site.groupSyncTagIds.some((id) => tagIds.includes(id));
+    g.synced = !syncFilterActive || site.groupSyncTagIds.some((id) => tagIds.includes(id));
+    g.leadersOnly = site.groupSyncTagIdsLeadersOnly.some((id) => tagIds.includes(id));
     g.recursiveMembers = site.recursiveMembersTagId !== undefined && tagIds.includes(site.recursiveMembersTagId);
     // Pre-compute the "distinguished name" of this group for LDAP
     g.dn = site.compatTransform(site.fnGroupDn(g['name']));
@@ -346,11 +357,13 @@ async function fetchGroups(site) {
     g.specialClasses = sgmKeys.filter((k) => info[k])
     groupMap[g['id']] = g;
   });
-  if (site.groupSyncTagIds.length > 0) {
+  if (syncFilterActive) {
     const synced = Object.values(groupMap).filter((g) => g.synced).length;
+    const leadersOnly = Object.values(groupMap).filter((g) => g.leadersOnly).length;
     // Info level: makes the effect of the sync filter visible without DEBUG
-    logInfo(site, () => `Group sync filter (tag IDs [${site.groupSyncTagIds.join(", ")}]): ` +
-        `${synced} of ${data.length} groups match`);
+    logInfo(site, () => `Group sync filter (tag IDs [${site.groupSyncTagIds.join(", ")}], ` +
+        `leaders-only tag IDs [${site.groupSyncTagIdsLeadersOnly.join(", ")}]): ` +
+        `${synced} of ${data.length} groups match, ${leadersOnly} leaders-only`);
   }
   return groupMap;
 }
@@ -370,16 +383,20 @@ async function fetchHierarchies(site) {
 }
 
 /**
- * Fetches all group types from person master data.
+ * Fetches group types and group type roles from person master data.
+ * Returns the group type names by ID and the set of role IDs marked as leader roles
+ * (needed for the leaders-only groups, see groupSyncTagIdsLeadersOnly).
  * @param {object} site The site for which this information is requested.
  */
-async function fetchGroupTypes(site) {
+async function fetchMasterData(site) {
   const result = await site.api.get('person/masterdata');
-  logDebug(site, "fetchGroupTypes done");
+  logDebug(site, "fetchMasterData done");
   const groupTypes = {};
   // noinspection JSUnresolvedFunction
   result['data']['groupTypes'].forEach((gt) => groupTypes[gt['id']] = gt['name']);
-  return groupTypes;
+  const leaderRoleIds = new Set(
+      (result['data']['roles'] || []).filter((r) => r['isLeader']).map((r) => Number(r['id'])));
+  return { groupTypes, leaderRoleIds };
 }
 
 /**
@@ -387,32 +404,45 @@ async function fetchGroupTypes(site) {
  * Only groups that passed the tag-based sync filter (synced=true) become LDAP groups. Groups tagged
  * for recursive member collection include the members of their entire subgroup subtree - subgroups
  * contribute their members even when they are excluded by the sync filter themselves.
+ * Groups tagged for leaders-only sync (leadersOnly=true) additionally become a synthetic LDAP group
+ * (name plus leadersOnlyNameSuffix) containing only the members with a leader role.
  * @param {object} site The site for which this information is requested.
  */
 async function fetchAll(site) {
   return await getCached(site, RAW_DATA_KEY, async () => {
-    const [personMap, allGroupMap, memberships, groupTypes, childrenMap] = await Promise.all([
-      fetchPersons(site), fetchGroups(site), fetchMemberships(site), fetchGroupTypes(site),
+    const [personMap, allGroupMap, memberships, { groupTypes, leaderRoleIds }, childrenMap] = await Promise.all([
+      fetchPersons(site), fetchGroups(site), fetchMemberships(site), fetchMasterData(site),
       // The group hierarchy is only needed for the recursive member collection.
       site.recursiveMembersTagId === undefined ? {} : fetchHierarchies(site)
     ]);
-    // Direct members per group, over ALL groups: subgroups excluded by the sync filter still
-    // contribute their members to recursively collecting parent groups.
+    if (site.groupSyncTagIdsLeadersOnly.length > 0 && leaderRoleIds.size === 0) {
+      logWarn(site, "Leaders-only groups are configured, but no group type role is marked " +
+          "as leader in the ChurchTools master data - leaders-only groups will be empty!");
+    }
+    // Direct members (and direct leaders) per group, over ALL groups: subgroups excluded by the
+    // sync filter still contribute their members to recursively collecting parent groups.
     const directMembers = {};
+    const directLeaders = {};
+    const addTo = (map, groupId, personId) => {
+      if (!map[groupId]) {
+        map[groupId] = [personId];
+      } else {
+        map[groupId].push(personId);
+      }
+    };
     memberships.forEach((m) => {
       const { personId, groupId } = m;
       // Only map persons/groups that have not been filtered
       if ((personId in personMap) && (groupId in allGroupMap)) {
-        if (!directMembers[groupId]) {
-          directMembers[groupId] = [personId];
-        } else {
-          directMembers[groupId].push(personId);
+        addTo(directMembers, groupId, personId);
+        if (leaderRoleIds.has(Number(m['groupTypeRoleId']))) {
+          addTo(directLeaders, groupId, personId);
         }
       }
     });
     // Collects the members of a group's entire subtree (the group itself, its subgroups,
     // their subgroups, ...). The visited set guards against hierarchy cycles.
-    const collectSubtreeMembers = (rootId) => {
+    const collectSubtreeMembers = (rootId, membersOf) => {
       const members = new Set();
       const visited = new Set();
       const stack = [rootId];
@@ -422,7 +452,7 @@ async function fetchAll(site) {
           continue;
         }
         visited.add(gid);
-        (directMembers[gid] || []).forEach((pid) => members.add(pid));
+        (membersOf[gid] || []).forEach((pid) => members.add(pid));
         stack.push(...(childrenMap[gid] || []));
       }
       return [...members];
@@ -434,13 +464,35 @@ async function fetchAll(site) {
         groupMap[id] = g;
       }
     });
+    // Groups tagged for leaders-only sync additionally become a synthetic LDAP group under an
+    // offset ID, carrying only the leader-role members (of the subtree, if tagged recursive).
+    Object.entries(allGroupMap).forEach(([id, g]) => {
+      if (g.leadersOnly) {
+        const name = `${g['name']} ${site.leadersOnlyNameSuffix}`;
+        groupMap[String(LEADERS_ONLY_ID_OFFSET + Number(id))] = {
+          name,
+          information: g['information'],
+          specialClasses: g.specialClasses,
+          recursiveMembers: g.recursiveMembers,
+          dn: site.compatTransform(site.fnGroupDn(name)),
+          // Marks the entry as synthetic leaders-only group (the "leadersOnly" flag itself
+          // stays on the source group, which may be a regular LDAP group as well).
+          leadersOnlyOf: Number(id)
+        };
+      }
+    });
     // Create membership mappings
     const g2p = {}, p2g = {};
     Object.entries(groupMap).forEach(([id, g]) => {
-      const personIds = g.recursiveMembers ? collectSubtreeMembers(Number(id)) : (directMembers[id] || []);
+      // Leaders-only groups draw the leader-role members of their source group.
+      const isLeadersOnly = g.leadersOnlyOf !== undefined;
+      const membersOf = isLeadersOnly ? directLeaders : directMembers;
+      const sourceId = isLeadersOnly ? g.leadersOnlyOf : Number(id);
+      const personIds = g.recursiveMembers
+          ? collectSubtreeMembers(sourceId, membersOf) : (membersOf[sourceId] || []);
       if (g.recursiveMembers) {
         logDebug(site, () => `Recursive members of group "${g['name']}": ` +
-            `${personIds.length} total, ${(directMembers[id] || []).length} direct`);
+            `${personIds.length} total, ${(membersOf[sourceId] || []).length} direct`);
       }
       if (personIds.length > 0) {
         // Entry for group-to-persons-mappings
@@ -831,6 +883,9 @@ config.sites.forEach((site) => {
       `SMB ${site.smbEnabled ? `enabled (domain "${site.smbDomainName}")` : "disabled"}, ` +
       `group sync filter ${site.groupSyncTagIds.length > 0
           ? `tag IDs [${site.groupSyncTagIds.join(", ")}]` : "disabled"}, ` +
+      `leaders-only groups ${site.groupSyncTagIdsLeadersOnly.length > 0
+          ? `tag IDs [${site.groupSyncTagIdsLeadersOnly.join(", ")}], suffix "${site.leadersOnlyNameSuffix}"`
+          : "disabled"}, ` +
       `recursive members ${site.recursiveMembersTagId !== undefined
           ? `tag ID ${site.recursiveMembersTagId}` : "disabled"}`);
 
