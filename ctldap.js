@@ -232,7 +232,9 @@ async function fetchPersons(site) {
   data.forEach((p) => {
     if (p['invitationStatus'] === "accepted" && p['cmsUserId'] && p['cmsUserId'].trim() !== "") {
       personMap[p['id']] = p;
-      p.dn = site.compatTransform(site.fnUserDn(p['cmsUserId']));
+      // The entry name (cn) is the ChurchTools username without brackets, see ldapSafeName().
+      p.cn = ldapSafeName(site, p['cmsUserId'], "username");
+      p.dn = site.compatTransform(site.fnUserDn(p.cn));
     }
   });
   computeUids(site, personMap);
@@ -258,6 +260,30 @@ function asciiLoginName(name) {
       .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
+// Brackets of any kind are unusable in LDAP names: parentheses delimit search filter expressions
+// (RFC 4515), so an entry whose cn/uid contains them can never be looked up by that name - clients
+// (notably Synology DSM and samba) either escape them inconsistently or reject the entry outright.
+const BRACKETS = /[()[\]{}<>]/g;
+
+/**
+ * Removes brackets from a name used as LDAP cn or uid and normalizes the whitespace left behind,
+ * e.g. "Worship (LeiterIn)" -> "Worship LeiterIn", "mueller(2)" -> "mueller2".
+ * @param {object} site The site the name belongs to, for logging.
+ * @param {string} name The raw ChurchTools name (username or group name)
+ * @param {string} kind What the name denotes, for logging, e.g. "group name"
+ * @return {string} The name without brackets
+ */
+function ldapSafeName(site, name, kind) {
+  const stripped = name.replace(BRACKETS, "");
+  if (stripped === name) {
+    // Names without brackets are passed through untouched, whitespace included.
+    return name;
+  }
+  const safe = stripped.replace(/\s+/g, " ").trim();
+  logDebug(site, () => `Removed brackets from ${kind} "${name}" -> "${safe}"`);
+  return safe;
+}
+
 /**
  * Computes the login names (uid attribute values) of all persons, as p.uids.
  * The first value is always the (ASCII-transliterated) ChurchTools username: clients like
@@ -273,11 +299,12 @@ function asciiLoginName(name) {
  */
 function computeUids(site, personMap) {
   const persons = Object.values(personMap);
-  // The entry DN (and cn) keeps the original ChurchTools username - binds authenticate that
-  // name against the ChurchTools API - but all login names are the transliterated username.
+  // The entry DN (and cn) keeps the ChurchTools username with brackets removed, all login names
+  // are that username transliterated to ASCII. Binds resolve the bound cn back to the original
+  // ChurchTools username before authenticating against the API, see resolveCtUsername().
   const loginCounts = {};
   persons.forEach((p) => {
-    p.login = asciiLoginName(p['cmsUserId']);
+    p.login = ldapSafeName(site, asciiLoginName(p['cmsUserId']), "login name");
     const lc = p.login.toLowerCase();
     loginCounts[lc] = (loginCounts[lc] || 0) + 1;
   });
@@ -351,12 +378,22 @@ async function fetchGroups(site) {
     g.synced = !syncFilterActive || site.groupSyncTagIds.some((id) => tagIds.includes(id));
     g.leadersOnly = site.groupSyncTagIdsLeadersOnly.some((id) => tagIds.includes(id));
     g.recursiveMembers = site.recursiveMembersTagId !== undefined && tagIds.includes(site.recursiveMembersTagId);
-    // Pre-compute the "distinguished name" of this group for LDAP
-    g.dn = site.compatTransform(site.fnGroupDn(g['name']));
+    // Pre-compute the LDAP entry name (cn, brackets removed) and "distinguished name"
+    g.cn = ldapSafeName(site, g['name'], "group name");
+    g.dn = site.compatTransform(site.fnGroupDn(g.cn));
     const info = g['information'];
     g.specialClasses = sgmKeys.filter((k) => info[k])
     groupMap[g['id']] = g;
   });
+  // Removing brackets can make two group names collide (e.g. "Team (A)" and "Team A"),
+  // which would yield two LDAP entries sharing one DN.
+  const cnCounts = {};
+  Object.values(groupMap).filter((g) => g.synced).forEach((g) => {
+    const lc = g.cn.toLowerCase();
+    cnCounts[lc] = (cnCounts[lc] || 0) + 1;
+  });
+  Object.entries(cnCounts).filter(([, count]) => count > 1).forEach(([cn, count]) =>
+      logWarn(site, `Group name "${cn}" is ambiguous after removing brackets (${count} groups)!`));
   if (syncFilterActive) {
     const synced = Object.values(groupMap).filter((g) => g.synced).length;
     const leadersOnly = Object.values(groupMap).filter((g) => g.leadersOnly).length;
@@ -469,12 +506,14 @@ async function fetchAll(site) {
     Object.entries(allGroupMap).forEach(([id, g]) => {
       if (g.leadersOnly) {
         const name = `${g['name']} ${site.leadersOnlyNameSuffix}`;
+        const cn = ldapSafeName(site, name, "leaders-only group name");
         groupMap[String(LEADERS_ONLY_ID_OFFSET + Number(id))] = {
           name,
+          cn,
           information: g['information'],
           specialClasses: g.specialClasses,
           recursiveMembers: g.recursiveMembers,
-          dn: site.compatTransform(site.fnGroupDn(name)),
+          dn: site.compatTransform(site.fnGroupDn(cn)),
           // Marks the entry as synthetic leaders-only group (the "leadersOnly" flag itself
           // stays on the source group, which may be a regular LDAP group as well).
           leadersOnlyOf: Number(id)
@@ -523,7 +562,8 @@ function requestUsers(req, _res, next) {
     const { p2g, personMap, groupMap } = await fetchAll(site);
     const smbSid = site.smbEnabled ? smbStore.getSiteSid(site) : null;
     let newCache = Object.entries(personMap).map(([id, p]) => {
-      const cn = p['cmsUserId'];
+      // The cn matches the entry DN: the ChurchTools username without brackets.
+      const cn = p.cn;
       const email = site.compatTransformEmail(p['email']);
       const uidNumber = POSIX_ID_BASE + Number(id);
       const attributes = {
@@ -633,7 +673,9 @@ function requestGroups(req, _res, next) {
       return attributes;
     };
     const newCache = Object.entries(groupMap).map(([id, g]) => {
-      const cn = g['name'];
+      // The cn matches the entry DN: the ChurchTools group name without brackets. The unchanged
+      // name stays available as displayname, which is not part of any DN or filter lookup.
+      const cn = g.cn;
       const info = g['information'];
       const groupType = groupTypes[info['groupTypeId']];
       const objectClasses = ["top", "group", "CTGroup" + groupType.charAt(0).toUpperCase() + groupType.slice(1),
@@ -815,6 +857,32 @@ function endSuccess(_req, res, next) {
 }
 
 /**
+ * Resolves the cn a client binds with back to the ChurchTools username. Entry cn values have
+ * brackets removed (see ldapSafeName()), so a username containing brackets must be restored
+ * before it is sent to the ChurchTools API. Names that match no person - the admin bind, or an
+ * email alias, which ChurchTools accepts as login as well - are passed through unchanged.
+ * @param {object} site The site of the bind.
+ * @param {string} cn The cn of the bind DN.
+ * @return {Promise<string>} The ChurchTools username to authenticate with.
+ */
+async function resolveCtUsername(site, cn) {
+  try {
+    const { personMap } = await fetchAll(site);
+    const lc = cn.toLowerCase();
+    const person = Object.values(personMap).find((p) => p.cn.toLowerCase() === lc);
+    if (person && person['cmsUserId'] !== cn) {
+      logDebug(site, () => `Resolved bind name "${cn}" to ChurchTools username "${person['cmsUserId']}"`);
+    }
+    return person ? person['cmsUserId'] : cn;
+  } catch (error) {
+    // Without the person data the bind name is the best guess - it only differs for
+    // usernames containing brackets.
+    logWarn(site, `Could not resolve bind name "${cn}" against ChurchTools persons: ${error}`);
+    return cn;
+  }
+}
+
+/**
  * Checks the given credentials against the credentials in the config file or against the ChurchTools API.
  * @param {object} req - Request object
  * @param {object} _res - Response object
@@ -842,7 +910,9 @@ async function authenticate(req, _res, next) {
   } else {
     logDebug(site, () => `Bind user with DN "${req.dn}"`);
   }
-  const username = parseDN(req.dn).rdnAt(0).getValue("cn");
+  // The name the client binds with (the entry cn), and the ChurchTools username behind it.
+  const bindName = parseDN(req.dn).rdnAt(0).getValue("cn");
+  const username = await resolveCtUsername(site, bindName);
   try {
     await site.api.post('login', {
       json: {
@@ -854,8 +924,9 @@ async function authenticate(req, _res, next) {
     if (site.smbEnabled) {
       // SMB/NTLM needs the NT hash of the password, which ChurchTools cannot provide.
       // Capture it from this successful plaintext bind and persist it for SMB clients.
-      if (smbStore.setUserHash(site, username, ntHash(req.credentials))) {
-        logInfo(site, () => `Stored new SMB NT hash for "${username}"`);
+      // Stored under the bind name, since that is what the entry lookup uses (see requestUsers()).
+      if (smbStore.setUserHash(site, bindName, ntHash(req.credentials))) {
+        logInfo(site, () => `Stored new SMB NT hash for "${bindName}"`);
         // Expire the users cache, so the new hash is served without waiting for the cache TTL.
         const cached = site.CACHE[USERS_KEY];
         if (cached) {

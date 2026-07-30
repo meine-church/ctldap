@@ -1,5 +1,19 @@
 # Changelog
 
+### 3.7.1
+- Brackets (`()`, `[]`, `{}`, `<>`) are removed from group names and usernames before they are
+  used as LDAP names (`cn`, `dn`, `uid`, `memberUid`, `homeDirectory`). Parentheses delimit
+  search filter expressions (RFC 4515), so entries containing them could not be looked up
+  reliably by name; whitespace left behind is collapsed, e.g. `Worship (LeiterIn)` becomes
+  `cn=Worship LeiterIn`. The unchanged ChurchTools group name is still served as `displayname`.
+- Binds resolve the bound `cn` back to the original ChurchTools username, so users whose
+  username contains brackets keep authenticating against the ChurchTools API.
+- Group names that become ambiguous by removing brackets are logged as a warning, like the
+  already existing warning for login names ambiguous after transliteration.
+- The default `GROUP_SYNC_LEADERS_ONLY_SUFFIX`/`leadersOnlyNameSuffix` is now `LeiterIn`
+  instead of `(LeiterIn)`; existing configurations using `(LeiterIn)` produce the same
+  group names, since the brackets are removed anyway.
+
 ### 3.7.0
 - Leaders-only groups (opt-in via `GROUP_SYNC_TAG_IDS_LEADERSONLY`/`groupSyncTagIdsLeadersOnly`,
   a comma-separated list of ChurchTools group tag IDs): a group carrying one of these tags is

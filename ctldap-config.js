@@ -42,7 +42,8 @@ export class CtldapConfig {
         // Groups carrying one of these tags become ADDITIONAL leaders-only LDAP groups
         // (only members with a leader role), named with the leadersOnlyNameSuffix.
         this.groupSyncTagIdsLeadersOnly = CtldapConfig.asTagIdList(config.groupSyncTagIdsLeadersOnly);
-        this.leadersOnlyNameSuffix = CtldapConfig.asOptionalString(config.leadersOnlyNameSuffix) || "(LeiterIn)";
+        // Brackets in the suffix are removed from the resulting cn anyway (see ldapSafeName()).
+        this.leadersOnlyNameSuffix = CtldapConfig.asOptionalString(config.leadersOnlyNameSuffix) || "LeiterIn";
         // Groups carrying this tag include the members of all their subgroups as LDAP members.
         this.recursiveMembersTagId = CtldapConfig.asTagId(config.recursiveMembersTagId);
         // SMB/samba support (NT hash capture on bind + samba attributes)

@@ -35,6 +35,20 @@ For such a configuration, the
 - users are found in the organizational unit `ou=users,o=churchtools`
 - groups are found in the organizational unit `ou=groups,o=churchtools`
 
+## Names in LDAP
+ChurchTools names are not always valid LDAP names, so ctldap normalizes them:
+
+- **Brackets** (`(`, `)`, `[`, `]`, `{`, `}`, `<`, `>`) are removed from group names and
+  usernames, since parentheses delimit LDAP search filter expressions and entries containing
+  them cannot be looked up reliably (e.g. `Worship (LeiterIn)` → `cn=Worship LeiterIn`).
+  Leftover double spaces are collapsed. The unchanged ChurchTools group name remains available
+  as the group's `displayname`, and binds are still authenticated with the original
+  ChurchTools username.
+- **Login names** (`uid`, `memberUid`) are additionally transliterated to ASCII
+  (`mbösiger` → `mboesiger`), as required by POSIX/nss clients such as Synology DSM.
+
+Names that become ambiguous through this normalization are reported as warnings in the log.
+
 # Restricting synced groups & recursive members (group tags)
 By default, all groups of the supported group types are provided as LDAP groups. Two optional
 env vars restrict/extend this via ChurchTools group tags (list your tags and their IDs via
@@ -47,7 +61,7 @@ env vars restrict/extend this via ChurchTools group tags (list your tags and the
   of these tags is provided as an *additional* LDAP group containing only the members with a
   leader role (ChurchTools group type roles marked as "leader"). The leaders-only group is named
   after the original group plus the suffix from `GROUP_SYNC_LEADERS_ONLY_SUFFIX` (default
-  `(LeiterIn)`, separated by a space), e.g. `Worship` → `Worship (LeiterIn)`. A group may carry
+  `LeiterIn`, separated by a space), e.g. `Worship` → `Worship LeiterIn`. A group may carry
   a `GROUP_SYNC_TAG_IDS` tag (regular group), one of these tags (leaders-only group only) or
   both tags (both LDAP groups are provided). A group tagged for recursive member collection
   provides the leaders of its entire subgroup subtree in its leaders-only group.

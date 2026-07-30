@@ -75,8 +75,10 @@ config:
   # "none" (or an empty env value) disables leaders-only groups, see the smbSidBase NOTE.
   groupSyncTagIdsLeadersOnly: ${GROUP_SYNC_TAG_IDS_LEADERSONLY:none}
   # Name suffix for leaders-only groups, appended to the ChurchTools group name separated
-  # by a space, e.g. "Worship" -> "Worship (LeiterIn)".
-  leadersOnlyNameSuffix: ${GROUP_SYNC_LEADERS_ONLY_SUFFIX:(LeiterIn)}
+  # by a space, e.g. "Worship" -> "Worship LeiterIn".
+  # NOTE: brackets are invalid in LDAP names and are removed from group names and usernames,
+  # so a suffix like "(LeiterIn)" ends up as "LeiterIn" as well.
+  leadersOnlyNameSuffix: ${GROUP_SYNC_LEADERS_ONLY_SUFFIX:LeiterIn}
   # Optional: A single ChurchTools group tag ID enabling recursive member collection.
   # A group carrying this tag provides not only its direct members, but the members of all its
   # subgroups (the entire subtree of the ChurchTools group hierarchy) as LDAP group members.
@@ -122,7 +124,7 @@ sites:
 #    smbSidBase: S-1-5-21-XXXXXXXXXX-XXXXXXXXXX-XXXXXXXXXX
 #    groupSyncTagIds: 241,242
 #    groupSyncTagIdsLeadersOnly: 243
-#    leadersOnlyNameSuffix: (LeiterIn)
+#    leadersOnlyNameSuffix: LeiterIn
 #    recursiveMembersTagId: 244
 #    specialGroupMappings:
 #      nextcloud:
