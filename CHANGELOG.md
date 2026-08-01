@@ -1,5 +1,16 @@
 # Changelog
 
+### 3.7.2
+- The user/group cache can now be disabled: `CACHE_LIFETIME_MS=0` (or `off`/`none`/`false`/
+  `disabled`, also as `cacheLifetime` in `ctldap.yml`) makes every LDAP search fetch fresh data
+  from ChurchTools. Useful for clients that cache the LDAP data themselves, e.g. Synology DSM.
+  Concurrent lookups within one request still share a single ChurchTools fetch per data set,
+  and the fetched data is no longer kept in memory afterwards.
+- With a disabled cache, the "Updated users/groups" sync messages are logged at debug instead
+  of info level, since they would otherwise appear on every single search.
+- The active cache setting is logged at startup, and a non-numeric `CACHE_LIFETIME_MS` now
+  aborts startup instead of silently falling back to the 5 minute default.
+
 ### 3.7.1
 - Brackets (`()`, `[]`, `{}`, `<>`) are removed from group names and usernames before they are
   used as LDAP names (`cn`, `dn`, `uid`, `memberUid`, `homeDirectory`). Parentheses delimit

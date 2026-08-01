@@ -49,6 +49,17 @@ ChurchTools names are not always valid LDAP names, so ctldap normalizes them:
 
 Names that become ambiguous through this normalization are reported as warnings in the log.
 
+# Caching
+By default, ctldap caches the user/group data fetched from ChurchTools for 5 minutes
+(`CACHE_LIFETIME_MS`, in milliseconds). Set `CACHE_LIFETIME_MS=0` (or `off`) to **disable the
+cache**: every LDAP search then fetches fresh data from ChurchTools, so changes are visible
+immediately and nothing is kept in memory between requests. This is useful for clients that
+cache LDAP data themselves - e.g. Synology DSM, which syncs its own LDAP copy periodically.
+
+Note that a disabled cache means several ChurchTools API requests per LDAP search (persons,
+groups, memberships, master data). Concurrent lookups belonging to the same LDAP request still
+share one fetch, and the completed sync messages drop from info to debug level.
+
 # Restricting synced groups & recursive members (group tags)
 By default, all groups of the supported group types are provided as LDAP groups. Two optional
 env vars restrict/extend this via ChurchTools group tags (list your tags and their IDs via

@@ -7,7 +7,9 @@ config:
   ldapIp: ${LDAP_IP:0.0.0.0}
   # LDAP server port, you may change this to the privileged default port 389.
   ldapPort: ${LDAP_PORT:1389}
-  # This controls (in milliseconds) how old the user/group data can be until it is fetched from ChurchTools again
+  # This controls (in milliseconds) how old the user/group data can be until it is fetched from ChurchTools again.
+  # Set to 0 (or "off") to disable the cache entirely, so every LDAP search fetches fresh data from
+  # ChurchTools - useful for clients that cache the LDAP data themselves, e.g. Synology DSM.
   cacheLifetime: ${CACHE_LIFETIME_MS:300000}
 
   # This is required for clients using lowercase DNs, e.g. ownCloud/nextCloud

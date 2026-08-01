@@ -19,11 +19,11 @@ export class CtldapConfig {
         this.ldapIp = config.ldapIp;
         this.ldapPort = config.ldapPort;
 
-        if (typeof config.cacheLifetime !== 'number' && isNaN(config.cacheLifetime)) {
-            this.cacheLifetime = 300000;  // 5 minutes
-        } else {
-            this.cacheLifetime = Number(config.cacheLifetime);
-        }
+        // Cache lifetime of the user/group data in milliseconds. 0 (or "off") disables the cache,
+        // so every LDAP search fetches fresh data from ChurchTools - useful when the client caches
+        // the LDAP data itself (e.g. Synology DSM).
+        this.cacheLifetime = CtldapConfig.asCacheLifetime(config.cacheLifetime);
+        this.cacheDisabled = this.cacheLifetime <= 0;
         this.ldapUser = config.ldapUser;
         this.ldapPassword = config.ldapPassword;
         this.ctUri = config.ctUri;
@@ -91,6 +91,28 @@ export class CtldapConfig {
         }
         const str = String(val).trim();
         return (str === '' || str.toLowerCase() === 'none') ? undefined : str;
+    }
+
+    /**
+     * Parses the cache lifetime in milliseconds. Unset/empty falls back to 5 minutes, while 0,
+     * a negative value or one of the keywords "off"/"none"/"false"/"disabled" disables the cache.
+     * Non-numeric values throw, so a typo does not silently restore the default lifetime.
+     * @param val The raw config value.
+     * @return {number} The cache lifetime in ms, 0 meaning "cache disabled".
+     */
+    static asCacheLifetime (val) {
+        if (val === undefined || val === null || String(val).trim() === '') {
+            return 300000;  // 5 minutes
+        }
+        const str = String(val).trim().toLowerCase();
+        if (['off', 'none', 'false', 'disabled'].includes(str)) {
+            return 0;
+        }
+        const ms = Number(str);
+        if (!Number.isFinite(ms)) {
+            throw Error(`Invalid cacheLifetime "${val}", expected milliseconds (0 disables the cache)!`);
+        }
+        return Math.max(0, ms);
     }
 
     /**

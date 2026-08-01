@@ -125,7 +125,18 @@ const smbUserRid = (uidNumber) => uidNumber * 2 + 1000;
 const smbGroupRid = (gidNumber) => gidNumber * 2 + 1001;
 
 /**
+ * Logs a completed ChurchTools sync: at info level with an enabled cache (a rare, meaningful
+ * event), at debug level with a disabled cache (every single LDAP search syncs).
+ * @param {object} site - The site the sync belongs to
+ * @param {function|string} msg - The message (or a function returning it, for lazy evaluation)
+ */
+const logSync = (site, msg) => config.cacheDisabled ? logDebug(site, msg) : logInfo(site, msg);
+
+/**
  * Retrieves data from cache as a Promise or refreshes the data with the provided (async) factory.
+ * With a disabled cache (cacheLifetime 0), no entry is ever served or stored - but concurrent
+ * requests for the same key still share the pending Promise, so one LDAP request never triggers
+ * more than one ChurchTools fetch per key.
  * @param {object} site - The site for which to query the cache
  * @param {string} key - The cache key
  * @param {function} factory - A function returning a Promise that resolves with the new cache entry or rejects
@@ -135,7 +146,7 @@ function getCached(site, key, factory) {
   const co = cache[key] || { time: -1, entry: null };
   const promise = new Promise((resolve, reject) => {
     const time = new Date().getTime();
-    if (time - config.cacheLifetime < co.time) {
+    if (!config.cacheDisabled && time - config.cacheLifetime < co.time) {
       logDebug(site, `Returning cached data for key "${key}".`);
       resolve(co.entry);
     } else {
@@ -145,6 +156,13 @@ function getCached(site, key, factory) {
         // Call the factory() function to retrieve the Promise for the fresh entry
         // Either resolve with the new entry (plus cache update), or pass on the rejection
         co.promise = factory().then((result) => {
+          if (config.cacheDisabled) {
+            // Keep no reference to the (potentially large) data set
+            logDebug(site, `Cache disabled, discarding entry for cache key "${key}".`);
+            co.entry = null;
+            co.time = -1;
+            return result;
+          }
           logDebug(site, `Store cache entry for cache key "${key}".`)
           co.entry = result;
           co.time = new Date().getTime();
@@ -644,8 +662,9 @@ function requestUsers(req, _res, next) {
         }
       });
     }
-    // Info level: this marks a completed user sync from ChurchTools (cache refresh)
-    logInfo(site, () => `Updated users: ${newCache.length}`);
+    // Info level: this marks a completed user sync from ChurchTools (cache refresh). With a
+    // disabled cache every search syncs, so it is logged at debug level to avoid log spam.
+    logSync(site, () => `Updated users: ${newCache.length}`);
     return newCache;
   });
   return next();
@@ -715,8 +734,9 @@ function requestGroups(req, _res, next) {
         objectClass: ["top", "posixGroup"]
       })
     });
-    // Info level: this marks a completed group sync from ChurchTools (cache refresh)
-    logInfo(site, () => `Updated groups: ${newCache.length}`);
+    // Info level: this marks a completed group sync from ChurchTools (cache refresh). With a
+    // disabled cache every search syncs, so it is logged at debug level to avoid log spam.
+    logSync(site, () => `Updated groups: ${newCache.length}`);
     return newCache;
   });
   return next();
@@ -1121,5 +1141,6 @@ server.search('', lowerCaseRequestedAttributes, (req, res) => {
 // Start LDAP server
 server.listen(parseInt(config.ldapPort), config.ldapIp, () => {
   const version = JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), { encoding: "utf8" }))['version'];
-  logInfo({ name: 'root logger' }, `ChurchTools-LDAP-Wrapper ${version} listening @ ${server.url}`);
+  logInfo({ name: 'root logger' }, `ChurchTools-LDAP-Wrapper ${version} listening @ ${server.url}, ` +
+      `cache ${config.cacheDisabled ? "disabled" : `lifetime ${config.cacheLifetime} ms`}`);
 });
