@@ -35,16 +35,54 @@ export class CtldapSite {
         // SMB/samba support, optional per site with fallback to the main config.
         const smbEnabled = CtldapConfig.asOptionalBool(site.smbEnabled);
         this.smbEnabled = smbEnabled === undefined ? config.smbEnabled : smbEnabled;
-        // Tag-based group sync filter and recursive member collection,
-        // optional per site with fallback to the main config.
-        this.groupSyncTagIds = site.groupSyncTagIds === undefined
-            ? config.groupSyncTagIds : CtldapConfig.asTagIdList(site.groupSyncTagIds);
-        this.groupSyncTagIdsLeadersOnly = site.groupSyncTagIdsLeadersOnly === undefined
-            ? config.groupSyncTagIdsLeadersOnly : CtldapConfig.asTagIdList(site.groupSyncTagIdsLeadersOnly);
-        this.leadersOnlyNameSuffix =
-            CtldapConfig.asOptionalString(site.leadersOnlyNameSuffix) || config.leadersOnlyNameSuffix;
-        this.recursiveMembersTagId = site.recursiveMembersTagId === undefined
-            ? config.recursiveMembersTagId : CtldapConfig.asTagId(site.recursiveMembersTagId);
+        // Custom-field-based group sync, each field key optional per site with fallback
+        // to the main config ("none" explicitly disables a variant for the site).
+        const siteFields = CtldapConfig.asGroupSyncFields(site);
+        const fieldOrMain = (rawSiteValue, siteValue, mainValue) =>
+            rawSiteValue === undefined ? mainValue : siteValue;
+        this.groupSyncFields = {
+            members: fieldOrMain(site.groupFieldMembers,
+                siteFields.members, config.groupSyncFields.members),
+            membersSubgroupLeaders: fieldOrMain(site.groupFieldMembersSubgroupLeaders,
+                siteFields.membersSubgroupLeaders, config.groupSyncFields.membersSubgroupLeaders),
+            membersSubgroups: fieldOrMain(site.groupFieldMembersSubgroups,
+                siteFields.membersSubgroups, config.groupSyncFields.membersSubgroups),
+            leaders: fieldOrMain(site.groupFieldLeaders,
+                siteFields.leaders, config.groupSyncFields.leaders),
+            leadersSubgroupLeaders: fieldOrMain(site.groupFieldLeadersSubgroupLeaders,
+                siteFields.leadersSubgroupLeaders, config.groupSyncFields.leadersSubgroupLeaders)
+        };
+        // With at least one field key configured, only groups with a checked field become LDAP groups.
+        this.groupSyncActive = Object.values(this.groupSyncFields).some((key) => key !== undefined);
+        // Any recursive variant configured -> the group hierarchy must be fetched.
+        this.groupSyncNeedsHierarchy = [
+            this.groupSyncFields.membersSubgroupLeaders,
+            this.groupSyncFields.membersSubgroups,
+            this.groupSyncFields.leadersSubgroupLeaders
+        ].some((key) => key !== undefined);
+        // Any leader-based variant configured -> leader roles from the master data are required.
+        this.groupSyncUsesLeaders = [
+            this.groupSyncFields.leaders,
+            this.groupSyncFields.leadersSubgroupLeaders,
+            this.groupSyncFields.membersSubgroupLeaders
+        ].some((key) => key !== undefined);
+        // Name suffixes of the variant groups, optional per site with fallback to the main
+        // config. All variants except "members" require a suffix (unset/empty/"none" falls
+        // back to the default), since it is what keeps the variant DNs distinct; the
+        // "members" suffix is optional ("none" explicitly disables it for the site).
+        const siteSuffixes = CtldapConfig.asGroupVariantSuffixes(site);
+        this.groupVariantSuffixes = {
+            members: fieldOrMain(site.groupFieldMembersSuffix,
+                siteSuffixes.members, config.groupVariantSuffixes.members),
+            leaders: siteSuffixes.leaders
+                || config.groupVariantSuffixes.leaders,
+            leadersSubgroupLeaders: siteSuffixes.leadersSubgroupLeaders
+                || config.groupVariantSuffixes.leadersSubgroupLeaders,
+            membersSubgroupLeaders: siteSuffixes.membersSubgroupLeaders
+                || config.groupVariantSuffixes.membersSubgroupLeaders,
+            membersSubgroups: siteSuffixes.membersSubgroups
+                || config.groupVariantSuffixes.membersSubgroups
+        };
         // Samba matches the sambaDomain entry against its (uppercase) workgroup name.
         this.smbDomainName = (site.smbDomainName || config.smbDomainName).toUpperCase();
         this.smbSidBase = CtldapConfig.asOptionalString(site.smbSidBase) || config.smbSidBase;

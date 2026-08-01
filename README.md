@@ -60,28 +60,42 @@ Note that a disabled cache means several ChurchTools API requests per LDAP searc
 groups, memberships, master data). Concurrent lookups belonging to the same LDAP request still
 share one fetch, and the completed sync messages drop from info to debug level.
 
-# Restricting synced groups & recursive members (group tags)
-By default, all groups of the supported group types are provided as LDAP groups. Two optional
-env vars restrict/extend this via ChurchTools group tags (list your tags and their IDs via
-`GET https://<your-instance>/api/tags/group`):
+# Selecting synced groups & their members (custom group fields)
+Which ChurchTools groups become LDAP groups - and which members they carry - is controlled by
+custom **checkbox group fields** ("DB-Felder", defined in the ChurchTools group settings). Five
+env vars name the *IDs* of these fields (list your group fields incl. their IDs via
+`GET https://<your-instance>/api/fields`, category `f_group`; the IDs are resolved to the
+fields' keys via the REST API on every sync):
 
-- `GROUP_SYNC_TAG_IDS`: comma-separated list of group tag IDs. If set, only groups carrying at
-  least one of these tags become LDAP groups; memberships in all other groups are not visible
-  via LDAP. Users are not filtered by this option.
-- `GROUP_SYNC_TAG_IDS_LEADERSONLY`: comma-separated list of group tag IDs. A group carrying one
-  of these tags is provided as an *additional* LDAP group containing only the members with a
-  leader role (ChurchTools group type roles marked as "leader"). The leaders-only group is named
-  after the original group plus the suffix from `GROUP_SYNC_LEADERS_ONLY_SUFFIX` (default
-  `LeiterIn`, separated by a space), e.g. `Worship` → `Worship LeiterIn`. A group may carry
-  a `GROUP_SYNC_TAG_IDS` tag (regular group), one of these tags (leaders-only group only) or
-  both tags (both LDAP groups are provided). A group tagged for recursive member collection
-  provides the leaders of its entire subgroup subtree in its leaders-only group.
-- `RECURSIVE_MEMBERS_TAG_ID`: a single group tag ID. A group carrying this tag provides not
-  only its direct members, but the members of all its subgroups (the entire subtree of the
-  ChurchTools group hierarchy) as LDAP group members. This is useful for clients without
-  nested-group support, e.g. for Synology DSM shared folder permissions. Subgroups contribute
-  their members even if they are excluded by `GROUP_SYNC_TAG_IDS` themselves - they just don't
-  appear as own LDAP groups.
+| env var | LDAP group members | default name (group `Jugend`) |
+|---|---|---|
+| `GROUP_FIELD_MEMBERS` | direct members (leaders included) | `Jugend` |
+| `GROUP_FIELD_MEMBERS_SUBGROUP_LEADERS` | direct members + leaders of all subgroups | `Jugend inkl. LeiterInnen untergeordneter Gruppen` |
+| `GROUP_FIELD_MEMBERS_SUBGROUPS` | members of the entire subgroup subtree | `Jugend inkl. untergeordnete Gruppen` |
+| `GROUP_FIELD_LEADERS` | only members with a leader role | `Jugend LeiterInnen` |
+| `GROUP_FIELD_LEADERS_SUBGROUP_LEADERS` | leaders of the group and of all subgroups | `Jugend LeiterInnen inkl. untergeordnete Gruppen` |
+
+Notes:
+- **Every checked field yields an own LDAP group** - a group with all five fields checked
+  becomes five LDAP groups. The "members" variant keeps the ChurchTools group name, every other
+  variant appends its suffix (configurable via `GROUP_FIELD_*_SUFFIX`, separated by a space).
+  `GROUP_FIELD_MEMBERS_SUFFIX` is empty by default, but may be set as well.
+- As soon as at least one field ID is configured, **only** groups with a checked field become
+  LDAP groups; memberships in all other groups are not visible via LDAP. Setting all five vars
+  to `none` disables the filter: all groups sync with their direct members. Users are never
+  filtered by these options.
+- The defaults are the field IDs of our ChurchTools instance (163-175); adapt them to your
+  own field IDs. A configured ID that does not exist as a group field is logged as a warning
+  and never matches.
+- A leader role is a ChurchTools group type role marked as "leader".
+- The "subgroup" variants walk the entire subtree of the ChurchTools group hierarchy. This is
+  useful for clients without nested-group support, e.g. for Synology DSM shared folder
+  permissions. Subgroups contribute their members even if they don't sync themselves - they
+  just don't appear as own LDAP groups.
+- **IMPORTANT**: ChurchTools only serves custom group fields to users whose churchdb permission
+  "security level group" covers the fields' security level (newly created fields default to the
+  highest level). If the API token user lacks that level, the fields are missing from the API
+  responses and *no* group syncs.
 
 # SMB support (e.g. Synology DSM shared folders)
 SMB/NTLM authentication requires the NT hash of the user's password, which ChurchTools does not

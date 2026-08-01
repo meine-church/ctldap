@@ -37,15 +37,22 @@ export class CtldapConfig {
         this.ldapBaseDn = config.ldapBaseDn;
         // Serve email addresses as additional uid values, so logins by email work (e.g. SMB)
         this.emailLogin = CtldapConfig.asOptionalBool(config.emailLogin) || false;
-        // Tag-based group sync filter: only groups carrying one of these tags become LDAP groups.
-        this.groupSyncTagIds = CtldapConfig.asTagIdList(config.groupSyncTagIds);
-        // Groups carrying one of these tags become ADDITIONAL leaders-only LDAP groups
-        // (only members with a leader role), named with the leadersOnlyNameSuffix.
-        this.groupSyncTagIdsLeadersOnly = CtldapConfig.asTagIdList(config.groupSyncTagIdsLeadersOnly);
-        // Brackets in the suffix are removed from the resulting cn anyway (see ldapSafeName()).
-        this.leadersOnlyNameSuffix = CtldapConfig.asOptionalString(config.leadersOnlyNameSuffix) || "LeiterIn";
-        // Groups carrying this tag include the members of all their subgroups as LDAP members.
-        this.recursiveMembersTagId = CtldapConfig.asTagId(config.recursiveMembersTagId);
+        // Custom-field-based group sync: checkbox group fields in ChurchTools decide which
+        // groups become LDAP groups and which members they carry (see ctldap.yml).
+        this.groupSyncFields = CtldapConfig.asGroupSyncFields(config);
+        // Name suffixes of the variant groups. All variants except "members" require a suffix
+        // (it keeps the variant DNs distinct); the "members" suffix is optional (default none).
+        // Brackets in a suffix are removed from the resulting cn anyway (see ldapSafeName()).
+        const suffixes = CtldapConfig.asGroupVariantSuffixes(config);
+        this.groupVariantSuffixes = {
+            members: suffixes.members,
+            leaders: suffixes.leaders || "LeiterInnen",
+            leadersSubgroupLeaders: suffixes.leadersSubgroupLeaders
+                || "LeiterInnen inkl. untergeordnete Gruppen",
+            membersSubgroupLeaders: suffixes.membersSubgroupLeaders
+                || "inkl. LeiterInnen untergeordneter Gruppen",
+            membersSubgroups: suffixes.membersSubgroups || "inkl. untergeordnete Gruppen"
+        };
         // SMB/samba support (NT hash capture on bind + samba attributes)
         this.smbEnabled = CtldapConfig.asOptionalBool(config.smbEnabled) || false;
         this.smbDomainName = config.smbDomainName || "WORKGROUP";
@@ -61,10 +68,16 @@ export class CtldapConfig {
                 ctUri: config.ctUri,
                 apiToken: config.apiToken,
                 specialGroupMappings: config.specialGroupMappings,
-                groupSyncTagIds: config.groupSyncTagIds,
-                groupSyncTagIdsLeadersOnly: config.groupSyncTagIdsLeadersOnly,
-                leadersOnlyNameSuffix: config.leadersOnlyNameSuffix,
-                recursiveMembersTagId: config.recursiveMembersTagId
+                groupFieldMembers: config.groupFieldMembers,
+                groupFieldMembersSubgroupLeaders: config.groupFieldMembersSubgroupLeaders,
+                groupFieldMembersSubgroups: config.groupFieldMembersSubgroups,
+                groupFieldLeaders: config.groupFieldLeaders,
+                groupFieldLeadersSubgroupLeaders: config.groupFieldLeadersSubgroupLeaders,
+                groupFieldMembersSuffix: config.groupFieldMembersSuffix,
+                groupFieldLeadersSuffix: config.groupFieldLeadersSuffix,
+                groupFieldLeadersSubgroupLeadersSuffix: config.groupFieldLeadersSubgroupLeadersSuffix,
+                groupFieldMembersSubgroupLeadersSuffix: config.groupFieldMembersSubgroupLeadersSuffix,
+                groupFieldMembersSubgroupsSuffix: config.groupFieldMembersSubgroupsSuffix
             }
         }
         this.sites = Object.keys(sites).map((siteName) => new CtldapSite(this, siteName, sites[siteName]));
@@ -116,39 +129,60 @@ export class CtldapConfig {
     }
 
     /**
-     * Parses a ChurchTools tag ID list: a comma-separated string (typical env var input),
-     * a YAML list, or a single number. Returns [] when unset/empty/"none". Invalid entries
-     * throw, since a typo in a permission-relevant filter must not silently sync all groups.
-     * @param val The raw config value.
-     * @return {number[]} The parsed tag IDs.
+     * Parses the custom-field-based group sync options: each entry names the ID of a checkbox
+     * group field in ChurchTools that marks groups for one LDAP group variant (see ctldap.yml).
+     * The IDs are resolved to the fields' information keys via GET /fields on each sync.
+     * Unset/empty/"none" (per entry) disables that variant.
+     * @param cfg The raw config object (main config or site config).
+     * @return {object} The field IDs by variant, each number or undefined.
      */
-    static asTagIdList (val) {
-        const str = Array.isArray(val) ? val.join(',') : CtldapConfig.asOptionalString(val);
-        if (str === undefined) {
-            return [];
-        }
-        return str.split(',')
-            .map((entry) => entry.trim())
-            .filter((entry) => entry !== '')
-            .map((entry) => {
-                const id = Number(entry);
-                if (!Number.isInteger(id) || id <= 0) {
-                    throw Error(`Invalid tag ID "${entry}", expected a positive integer!`);
-                }
-                return id;
-            });
+    static asGroupSyncFields (cfg) {
+        return {
+            // LDAP group with the group's direct members
+            members: CtldapConfig.asFieldId(cfg.groupFieldMembers),
+            // LDAP group with the direct members plus the leaders of all subgroups
+            membersSubgroupLeaders: CtldapConfig.asFieldId(cfg.groupFieldMembersSubgroupLeaders),
+            // LDAP group with the members of the entire subgroup subtree
+            membersSubgroups: CtldapConfig.asFieldId(cfg.groupFieldMembersSubgroups),
+            // LDAP group with only the group's leaders
+            leaders: CtldapConfig.asFieldId(cfg.groupFieldLeaders),
+            // LDAP group with the leaders of the group and of all subgroups
+            leadersSubgroupLeaders: CtldapConfig.asFieldId(cfg.groupFieldLeadersSubgroupLeaders)
+        };
     }
 
     /**
-     * Parses a single ChurchTools tag ID, undefined when unset/empty.
+     * Parses a single ChurchTools field ID, undefined when unset/empty/"none". Invalid values
+     * throw, since a typo in a permission-relevant filter must not silently sync all groups.
      * @param val The raw config value.
-     * @return {number|undefined} The parsed tag ID.
+     * @return {number|undefined} The parsed field ID.
      */
-    static asTagId (val) {
-        const ids = CtldapConfig.asTagIdList(val);
-        if (ids.length > 1) {
-            throw Error(`Expected a single tag ID, got "${val}"!`);
+    static asFieldId (val) {
+        const str = CtldapConfig.asOptionalString(val);
+        if (str === undefined) {
+            return undefined;
         }
-        return ids.length > 0 ? ids[0] : undefined;
+        const id = Number(str);
+        if (!Number.isInteger(id) || id <= 0) {
+            throw Error(`Invalid group field ID "${val}", expected a positive integer!`);
+        }
+        return id;
+    }
+
+    /**
+     * Parses the name suffixes of the variant groups (undefined entries fall back to defaults,
+     * see the constructor; the "members" suffix defaults to none). A suffix is appended to the
+     * ChurchTools group name separated by a space and keeps the DNs of a group's variants distinct.
+     * @param cfg The raw config object (main config or site config).
+     * @return {object} The suffixes by variant, each string or undefined.
+     */
+    static asGroupVariantSuffixes (cfg) {
+        return {
+            members: CtldapConfig.asOptionalString(cfg.groupFieldMembersSuffix),
+            leaders: CtldapConfig.asOptionalString(cfg.groupFieldLeadersSuffix),
+            leadersSubgroupLeaders: CtldapConfig.asOptionalString(cfg.groupFieldLeadersSubgroupLeadersSuffix),
+            membersSubgroupLeaders: CtldapConfig.asOptionalString(cfg.groupFieldMembersSubgroupLeadersSuffix),
+            membersSubgroups: CtldapConfig.asOptionalString(cfg.groupFieldMembersSubgroupsSuffix)
+        };
     }
 }

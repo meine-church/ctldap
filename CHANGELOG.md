@@ -1,5 +1,31 @@
 # Changelog
 
+### 3.8.0
+- **BREAKING**: The tag-based group sync (`GROUP_SYNC_TAG_IDS`, `GROUP_SYNC_TAG_IDS_LEADERSONLY`,
+  `GROUP_SYNC_LEADERS_ONLY_SUFFIX`, `RECURSIVE_MEMBERS_TAG_ID`) is replaced by a sync based on
+  custom checkbox group fields ("DB-Felder" in the ChurchTools group settings). Five env vars
+  name the IDs of these fields (defaults are our instance's IDs, 163-175); the IDs are
+  resolved to the fields' information keys via REST `GET /fields` on every sync.
+  **Every checked field yields an own LDAP group**, so a group with all five fields checked
+  becomes five LDAP groups:
+  - `GROUP_FIELD_MEMBERS`: the direct members, named like the ChurchTools group.
+  - `GROUP_FIELD_MEMBERS_SUBGROUP_LEADERS`: the direct members plus the leaders of all
+    subgroups (suffix default `inkl. LeiterInnen untergeordneter Gruppen`).
+  - `GROUP_FIELD_MEMBERS_SUBGROUPS`: the members of the entire subgroup subtree
+    (suffix default `inkl. untergeordnete Gruppen`).
+  - `GROUP_FIELD_LEADERS`: only the members with a leader role
+    (suffix default `LeiterInnen`).
+  - `GROUP_FIELD_LEADERS_SUBGROUP_LEADERS`: the leaders of the group and of all subgroups
+    (suffix default `LeiterInnen inkl. untergeordnete Gruppen`).
+- All variants except "members" append a suffix to the group name (configurable via
+  `GROUP_FIELD_*_SUFFIX` env vars) and use offset IDs; the 3.7 leaders-only offset (500000)
+  is kept for the `GROUP_FIELD_LEADERS` variant. `GROUP_FIELD_MEMBERS_SUFFIX` is optional
+  and empty by default.
+- With at least one field key configured, only groups with a checked field become LDAP groups.
+  All keys set to `none` disable the filter (all groups sync with their direct members).
+- NOTE: The API token user needs a churchdb "security level group" covering the fields'
+  security level, otherwise ChurchTools omits the fields from the API and no group syncs.
+
 ### 3.7.2
 - The user/group cache can now be disabled: `CACHE_LIFETIME_MS=0` (or `off`/`none`/`false`/
   `disabled`, also as `cacheLifetime` in `ctldap.yml`) makes every LDAP search fetch fresh data

@@ -61,33 +61,45 @@ config:
   # default would never be substituted by yaml-env-defaults, not even with the variable set!
   smbSidBase: ${SMB_SID_BASE:none}
 
-  # Optional: Comma-separated list of ChurchTools group tag IDs to restrict the group sync.
-  # If set, only groups carrying at least one of these tags are provided as LDAP groups
-  # (memberships in all other groups are not visible via LDAP). Leave empty to sync all groups.
-  # Users are not filtered by this option. The available tags (with their IDs) can be listed
-  # via GET https://<your-instance>/api/tags/group
-  # "none" (or an empty env value) disables the filter, see the smbSidBase NOTE.
-  groupSyncTagIds: ${GROUP_SYNC_TAG_IDS:none}
-  # Optional: Comma-separated list of ChurchTools group tag IDs for leaders-only groups.
-  # A group carrying one of these tags is provided as an ADDITIONAL LDAP group that contains
-  # only the members with a leader role (per ChurchTools group type role, "isLeader").
-  # The leaders-only group is named after the original group plus leadersOnlyNameSuffix.
-  # A group may carry a groupSyncTagIds tag (regular group), one of these tags (leaders-only
-  # group) or both (both LDAP groups are provided).
-  # "none" (or an empty env value) disables leaders-only groups, see the smbSidBase NOTE.
-  groupSyncTagIdsLeadersOnly: ${GROUP_SYNC_TAG_IDS_LEADERSONLY:none}
-  # Name suffix for leaders-only groups, appended to the ChurchTools group name separated
-  # by a space, e.g. "Worship" -> "Worship LeiterIn".
-  # NOTE: brackets are invalid in LDAP names and are removed from group names and usernames,
-  # so a suffix like "(LeiterIn)" ends up as "LeiterIn" as well.
-  leadersOnlyNameSuffix: ${GROUP_SYNC_LEADERS_ONLY_SUFFIX:LeiterIn}
-  # Optional: A single ChurchTools group tag ID enabling recursive member collection.
-  # A group carrying this tag provides not only its direct members, but the members of all its
-  # subgroups (the entire subtree of the ChurchTools group hierarchy) as LDAP group members.
-  # Useful for clients without nested-group support, e.g. Synology DSM shared folder permissions.
-  # Subgroups contribute their members even if they are excluded by groupSyncTagIds themselves.
-  # "none" (or an empty env value) disables the recursive member collection.
-  recursiveMembersTagId: ${RECURSIVE_MEMBERS_TAG_ID:none}
+  # Custom-field-based group sync: which ChurchTools groups become LDAP groups (and which
+  # members they carry) is controlled by custom checkbox group fields ("DB-Felder" defined in
+  # the ChurchTools group settings). Each option below names the ID of one such field
+  # (list your group fields with their IDs via GET https://<your-instance>/api/fields,
+  # category "f_group"). The IDs are resolved via the REST API on every sync.
+  # EVERY checked field yields an own LDAP group, so a group with all five fields checked
+  # becomes five LDAP groups. The "members" variant keeps the ChurchTools group name; every
+  # other variant is named with its suffix, appended to the group name separated by a space
+  # (e.g. "Jugend" -> "Jugend LeiterInnen"). Brackets are invalid in LDAP names and are
+  # removed from names and suffixes.
+  # As soon as at least one field ID is configured, ONLY groups with a checked field become
+  # LDAP groups - memberships in all other groups are not visible via LDAP. Set all IDs to
+  # "none" to disable the filter and sync all groups (with their direct members).
+  # Users are never filtered by these options.
+  # IMPORTANT: The API token user must be allowed to see the fields, i.e. its churchdb
+  # permission "security level group" must cover the fields' security level - otherwise
+  # ChurchTools omits the fields from the API responses and NO group syncs.
+  # "none" (or an empty env value) disables single variants, see the smbSidBase NOTE.
+  #
+  # LDAP group carrying the group's direct members (leaders included).
+  # Its suffix is optional and empty by default ("none" = no suffix):
+  groupFieldMembers: ${GROUP_FIELD_MEMBERS:166}
+  groupFieldMembersSuffix: ${GROUP_FIELD_MEMBERS_SUFFIX:none}
+  # LDAP group carrying the direct members PLUS the leaders of all subgroups
+  # (the entire subtree of the ChurchTools group hierarchy):
+  groupFieldMembersSubgroupLeaders: ${GROUP_FIELD_MEMBERS_SUBGROUP_LEADERS:172}
+  groupFieldMembersSubgroupLeadersSuffix: ${GROUP_FIELD_MEMBERS_SUBGROUP_LEADERS_SUFFIX:inkl. LeiterInnen untergeordneter Gruppen}
+  # LDAP group carrying the members of the entire subgroup subtree. Useful for clients
+  # without nested-group support, e.g. Synology DSM shared folder permissions.
+  # Subgroups contribute their members even if they don't sync themselves:
+  groupFieldMembersSubgroups: ${GROUP_FIELD_MEMBERS_SUBGROUPS:169}
+  groupFieldMembersSubgroupsSuffix: ${GROUP_FIELD_MEMBERS_SUBGROUPS_SUFFIX:inkl. untergeordnete Gruppen}
+  # LDAP group carrying only the members with a leader role (per ChurchTools group type
+  # role, "isLeader"):
+  groupFieldLeaders: ${GROUP_FIELD_LEADERS:163}
+  groupFieldLeadersSuffix: ${GROUP_FIELD_LEADERS_SUFFIX:LeiterInnen}
+  # LDAP group carrying the leaders of the group and of all subgroups:
+  groupFieldLeadersSubgroupLeaders: ${GROUP_FIELD_LEADERS_SUBGROUP_LEADERS:175}
+  groupFieldLeadersSubgroupLeadersSuffix: ${GROUP_FIELD_LEADERS_SUBGROUP_LEADERS_SUFFIX:LeiterInnen inkl. untergeordnete Gruppen}
 
   # This map specifies special group properties, typically yes/no-columns, that, when found in the group information,
   # are translated to additional LDAP object classes that will be attached to the group and user objects.
@@ -124,10 +136,16 @@ sites:
 #    smbEnabled: false
 #    smbDomainName: WORKGROUP
 #    smbSidBase: S-1-5-21-XXXXXXXXXX-XXXXXXXXXX-XXXXXXXXXX
-#    groupSyncTagIds: 241,242
-#    groupSyncTagIdsLeadersOnly: 243
-#    leadersOnlyNameSuffix: LeiterIn
-#    recursiveMembersTagId: 244
+#    groupFieldMembers: 166
+#    groupFieldMembersSuffix: none
+#    groupFieldMembersSubgroupLeaders: 172
+#    groupFieldMembersSubgroupLeadersSuffix: inkl. LeiterInnen untergeordneter Gruppen
+#    groupFieldMembersSubgroups: 169
+#    groupFieldMembersSubgroupsSuffix: inkl. untergeordnete Gruppen
+#    groupFieldLeaders: 163
+#    groupFieldLeadersSuffix: LeiterInnen
+#    groupFieldLeadersSubgroupLeaders: 175
+#    groupFieldLeadersSubgroupLeadersSuffix: LeiterInnen inkl. untergeordnete Gruppen
 #    specialGroupMappings:
 #      nextcloud:
 #        groupClass: NextCloudGroup
