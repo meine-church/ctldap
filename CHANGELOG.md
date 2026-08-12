@@ -1,5 +1,23 @@
 # Changelog
 
+### 3.9.0
+- Account names from the primary email address (`EMAIL_LOCALPART_NAMES`/`emailLocalpartNames`,
+  **enabled by default**, also per site): the entry `cn`/DN and the canonical login name
+  (`uid[0]`, `memberUid`, `homeDirectory`) are now derived from the **local part of the
+  person's primary email**, e.g. `fernando.abade@example.org` → account `fernando.abade`
+  (previously the ChurchTools username, e.g. `fabade`). The ChurchTools username remains the
+  fallback for persons without a primary email, and whenever the local part is not unique:
+  shared with another person's local part (case-insensitively, e.g. a family email address)
+  or colliding with any other person's ChurchTools username - all usernames stay reserved as
+  fallback names, so every account name maps to exactly one person. Fallbacks caused by a
+  non-unique local part are logged at debug level.
+- Binds resolve the bound `cn` back to the ChurchTools username (like the existing bracket
+  handling), so authentication against the ChurchTools API is unaffected. With `EMAIL_LOGIN`
+  enabled, the email aliases are checked against the new account names, as before.
+- NOTE: Enabling/disabling the option renames existing accounts in LDAP clients (new DNs,
+  `uid`, `memberUid`, `homeDirectory`). With SMB enabled, stored NT hashes are keyed by the
+  bind name, so each renamed user must log in once again before SMB access works.
+
 ### 3.8.0
 - **BREAKING**: The tag-based group sync (`GROUP_SYNC_TAG_IDS`, `GROUP_SYNC_TAG_IDS_LEADERSONLY`,
   `GROUP_SYNC_LEADERS_ONLY_SUFFIX`, `RECURSIVE_MEMBERS_TAG_ID`) is replaced by a sync based on

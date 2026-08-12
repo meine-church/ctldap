@@ -44,6 +44,16 @@ config:
   # ChurchTools username. Emails shared by multiple persons are dropped from all of them.
   emailLogin: ${EMAIL_LOGIN:false}
 
+  # Derive the account names (entry cn/DN and canonical uid) from the LOCAL PART of the
+  # primary email address, e.g. "fernando.abade@example.org" -> account "fernando.abade".
+  # The ChurchTools username remains the fallback for persons without a primary email, and
+  # whenever the local part is not unique: shared with another person's local part (e.g. a
+  # family email address) or colliding with another person's ChurchTools username.
+  # Binds still authenticate with the ChurchTools username against the ChurchTools API.
+  # NOTE: Enabling/disabling this renames existing accounts in LDAP clients, and with SMB
+  # enabled each renamed user must log in once again before SMB access works.
+  emailLocalpartNames: ${EMAIL_LOCALPART_NAMES:true}
+
   # SMB/samba support (e.g. for Synology DSM shared folder access via SMB):
   # ChurchTools does not provide the NT hash needed for SMB/NTLM authentication. When enabled,
   # ctldap computes it on each successful LDAP bind with a password and persists it (see smbStoreFile),
@@ -133,6 +143,7 @@ sites:
 #    ctUri: https://XXXXXXXXXXXXXXXXXXXX.church.tools/
 #    apiToken: XXXXXXXXXXXXXXXXXXXX
 #    emailLogin: false
+#    emailLocalpartNames: true
 #    smbEnabled: false
 #    smbDomainName: WORKGROUP
 #    smbSidBase: S-1-5-21-XXXXXXXXXX-XXXXXXXXXX-XXXXXXXXXX

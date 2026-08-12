@@ -32,6 +32,10 @@ export class CtldapSite {
         // Email login, optional per site with fallback to the main config.
         const emailLogin = CtldapConfig.asOptionalBool(site.emailLogin);
         this.emailLogin = emailLogin === undefined ? config.emailLogin : emailLogin;
+        // Email-local-part account names, optional per site with fallback to the main config.
+        const emailLocalpartNames = CtldapConfig.asOptionalBool(site.emailLocalpartNames);
+        this.emailLocalpartNames = emailLocalpartNames === undefined
+            ? config.emailLocalpartNames : emailLocalpartNames;
         // SMB/samba support, optional per site with fallback to the main config.
         const smbEnabled = CtldapConfig.asOptionalBool(site.smbEnabled);
         this.smbEnabled = smbEnabled === undefined ? config.smbEnabled : smbEnabled;

@@ -36,10 +36,19 @@ For such a configuration, the
 - groups are found in the organizational unit `ou=groups,o=churchtools`
 
 ## Names in LDAP
+With `EMAIL_LOCALPART_NAMES=true` (the default), the **account name** of a person - the entry
+`cn`/DN and the canonical `uid` - is the **local part of the primary email address**, e.g.
+`fernando.abade@example.org` → account `fernando.abade`. The ChurchTools username remains the
+fallback for persons without a primary email, and whenever the local part is not unique:
+shared with another person's local part (e.g. a family email address) or colliding with
+another person's ChurchTools username. Set `EMAIL_LOCALPART_NAMES=false` to always use the
+ChurchTools username. Binds are authenticated against the ChurchTools API with the original
+ChurchTools username in either case.
+
 ChurchTools names are not always valid LDAP names, so ctldap normalizes them:
 
 - **Brackets** (`(`, `)`, `[`, `]`, `{`, `}`, `<`, `>`) are removed from group names and
-  usernames, since parentheses delimit LDAP search filter expressions and entries containing
+  account names, since parentheses delimit LDAP search filter expressions and entries containing
   them cannot be looked up reliably (e.g. `Worship (LeiterIn)` → `cn=Worship LeiterIn`).
   Leftover double spaces are collapsed. The unchanged ChurchTools group name remains available
   as the group's `displayname`, and binds are still authenticated with the original
@@ -110,8 +119,9 @@ Notes:
   all emails of a person (any domain) are then served as additional values of the `uid`
   attribute, which SMB/samba uses to resolve login names. The first `uid` value - the
   canonical account name, from which e.g. Synology DSM composes `<username>@<base DN>` -
-  remains the ChurchTools username; it must never be an email, since an `@` inside the
-  account name breaks DSM's name resolution. Emails shared by multiple persons are dropped.
+  remains the account name (see "Names in LDAP"); it must never be a full email, since an
+  `@` inside the account name breaks DSM's name resolution. Emails shared by multiple
+  persons are dropped.
 - Every user must **log in once** (e.g. at the DSM web GUI or any other service doing LDAP binds
   through ctldap) before SMB access works — and once again after each ChurchTools password change.
 - The store file contains NT hashes, which are **password-equivalent** secrets: keep the

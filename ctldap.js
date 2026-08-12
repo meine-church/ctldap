@@ -266,13 +266,68 @@ async function fetchPersons(site) {
   data.forEach((p) => {
     if (p['invitationStatus'] === "accepted" && p['cmsUserId'] && p['cmsUserId'].trim() !== "") {
       personMap[p['id']] = p;
-      // The entry name (cn) is the ChurchTools username without brackets, see ldapSafeName().
-      p.cn = ldapSafeName(site, p['cmsUserId'], "username");
-      p.dn = site.compatTransform(site.fnUserDn(p.cn));
     }
+  });
+  computeAccountNames(site, personMap);
+  Object.values(personMap).forEach((p) => {
+    // The entry name (cn) is the account name without brackets, see ldapSafeName().
+    p.cn = ldapSafeName(site, p.accountName, "account name");
+    p.dn = site.compatTransform(site.fnUserDn(p.cn));
   });
   computeUids(site, personMap);
   return personMap;
+}
+
+/**
+ * Computes the LDAP account name of each person, as p.accountName. The entry cn/DN and the
+ * canonical login name (uid[0]) are derived from it.
+ * With emailLocalpartNames enabled, the local part of the person's primary email address is
+ * preferred, e.g. "fernando.abade@example.org" -> "fernando.abade". The ChurchTools username
+ * remains the fallback for persons without a primary email - and whenever the local part
+ * would be ambiguous: shared with another person's local part (case-insensitively, e.g. a
+ * family email), or colliding with any other person's ChurchTools username (all usernames
+ * stay reserved as fallback names, so every account name maps to exactly one person).
+ * @param {object} site The site for which this information is requested.
+ * @param {object} personMap Map of person id to person, each person gets "accountName" set.
+ */
+function computeAccountNames(site, personMap) {
+  const persons = Object.values(personMap);
+  if (!site.emailLocalpartNames) {
+    persons.forEach((p) => p.accountName = p['cmsUserId']);
+    return;
+  }
+  const localpartOf = (p) => {
+    const email = p['email'];
+    const at = typeof email === "string" ? email.indexOf("@") : -1;
+    const localpart = at > 0 ? email.slice(0, at).trim() : "";
+    return localpart === "" ? undefined : localpart;
+  };
+  // Counting is done on lowercased names, since LDAP name lookups are case-insensitive.
+  const localpartCounts = {};
+  persons.forEach((p) => {
+    const localpart = localpartOf(p);
+    if (localpart) {
+      const lc = localpart.toLowerCase();
+      localpartCounts[lc] = (localpartCounts[lc] || 0) + 1;
+    }
+  });
+  const usernameOwners = {};
+  persons.forEach((p) => usernameOwners[p['cmsUserId'].toLowerCase()] = p['id']);
+  persons.forEach((p) => {
+    const localpart = localpartOf(p);
+    const lc = localpart && localpart.toLowerCase();
+    if (localpart && localpartCounts[lc] === 1
+        && (usernameOwners[lc] === undefined || usernameOwners[lc] === p['id'])) {
+      p.accountName = localpart;
+    } else {
+      p.accountName = p['cmsUserId'];
+      if (localpart) {
+        // Debug level: shared emails (e.g. family addresses) are normal, the fallback is expected.
+        logDebug(site, () => `Email local part "${localpart}" is not unique, ` +
+            `keeping username "${p['cmsUserId']}" as account name`);
+      }
+    }
+  });
 }
 
 // German umlauts/ligatures cannot be stripped to their base letter, they transliterate to digraphs.
@@ -320,7 +375,7 @@ function ldapSafeName(site, name, kind) {
 
 /**
  * Computes the login names (uid attribute values) of all persons, as p.uids.
- * The first value is always the (ASCII-transliterated) ChurchTools username: clients like
+ * The first value is always the (ASCII-transliterated) account name: clients like
  * Synology DSM treat it as the canonical account name and compose it as "<uid[0]>@<base DN>",
  * so it must never contain "@" (a full email as first value yields broken double-@ account
  * names and breaks the DSM login). It is also emitted as memberUid in group entries.
@@ -333,12 +388,12 @@ function ldapSafeName(site, name, kind) {
  */
 function computeUids(site, personMap) {
   const persons = Object.values(personMap);
-  // The entry DN (and cn) keeps the ChurchTools username with brackets removed, all login names
-  // are that username transliterated to ASCII. Binds resolve the bound cn back to the original
+  // The entry DN (and cn) keeps the account name with brackets removed, all login names are
+  // that name transliterated to ASCII. Binds resolve the bound cn back to the original
   // ChurchTools username before authenticating against the API, see resolveCtUsername().
   const loginCounts = {};
   persons.forEach((p) => {
-    p.login = ldapSafeName(site, asciiLoginName(p['cmsUserId']), "login name");
+    p.login = ldapSafeName(site, asciiLoginName(p.accountName), "login name");
     const lc = p.login.toLowerCase();
     loginCounts[lc] = (loginCounts[lc] || 0) + 1;
   });
@@ -654,7 +709,7 @@ function requestUsers(req, _res, next) {
     const { p2g, personMap, groupMap } = await fetchAll(site);
     const smbSid = site.smbEnabled ? smbStore.getSiteSid(site) : null;
     let newCache = Object.entries(personMap).map(([id, p]) => {
-      // The cn matches the entry DN: the ChurchTools username without brackets.
+      // The cn matches the entry DN: the account name (see computeAccountNames()) without brackets.
       const cn = p.cn;
       const email = site.compatTransformEmail(p['email']);
       const uidNumber = POSIX_ID_BASE + Number(id);
@@ -951,10 +1006,12 @@ function endSuccess(_req, res, next) {
 }
 
 /**
- * Resolves the cn a client binds with back to the ChurchTools username. Entry cn values have
- * brackets removed (see ldapSafeName()), so a username containing brackets must be restored
- * before it is sent to the ChurchTools API. Names that match no person - the admin bind, or an
- * email alias, which ChurchTools accepts as login as well - are passed through unchanged.
+ * Resolves the cn a client binds with back to the ChurchTools username. Entry cn values may
+ * differ from it: they have brackets removed (see ldapSafeName()) and may be derived from the
+ * primary email's local part (see computeAccountNames()), so the ChurchTools username must be
+ * restored before it is sent to the ChurchTools API. Names that match no person - the admin
+ * bind, or an email alias, which ChurchTools accepts as login as well - are passed through
+ * unchanged.
  * @param {object} site The site of the bind.
  * @param {string} cn The cn of the bind DN.
  * @return {Promise<string>} The ChurchTools username to authenticate with.
@@ -970,7 +1027,7 @@ async function resolveCtUsername(site, cn) {
     return person ? person['cmsUserId'] : cn;
   } catch (error) {
     // Without the person data the bind name is the best guess - it only differs for
-    // usernames containing brackets.
+    // usernames containing brackets or email-local-part account names.
     logWarn(site, `Could not resolve bind name "${cn}" against ChurchTools persons: ${error}`);
     return cn;
   }
@@ -1044,6 +1101,7 @@ async function authenticate(req, _res, next) {
 
 config.sites.forEach((site) => {
   logInfo(site, () => `Site configured: base DN "o=${site.name}", ` +
+      `account names from ${site.emailLocalpartNames ? "email local part" : "ChurchTools username"}, ` +
       `email login ${site.emailLogin ? "enabled" : "disabled"}, ` +
       `SMB ${site.smbEnabled ? `enabled (domain "${site.smbDomainName}")` : "disabled"}, ` +
       `group sync ${site.groupSyncActive

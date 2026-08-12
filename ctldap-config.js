@@ -37,6 +37,9 @@ export class CtldapConfig {
         this.ldapBaseDn = config.ldapBaseDn;
         // Serve email addresses as additional uid values, so logins by email work (e.g. SMB)
         this.emailLogin = CtldapConfig.asOptionalBool(config.emailLogin) || false;
+        // Derive account names (cn/uid) from the local part of the primary email address,
+        // with the ChurchTools username as fallback (see computeAccountNames() in ctldap.js).
+        this.emailLocalpartNames = CtldapConfig.asOptionalBool(config.emailLocalpartNames) || false;
         // Custom-field-based group sync: checkbox group fields in ChurchTools decide which
         // groups become LDAP groups and which members they carry (see ctldap.yml).
         this.groupSyncFields = CtldapConfig.asGroupSyncFields(config);
