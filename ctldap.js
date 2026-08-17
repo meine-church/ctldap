@@ -270,8 +270,9 @@ async function fetchPersons(site) {
   });
   computeAccountNames(site, personMap);
   Object.values(personMap).forEach((p) => {
-    // The entry name (cn) is the account name without brackets, see ldapSafeName().
-    p.cn = ldapSafeName(site, p.accountName, "account name");
+    // The entry name (cn) is the ASCII-transliterated account name without brackets: clients
+    // like Synology DSM fail on DNs containing non-ASCII characters (e.g. umlauts).
+    p.cn = ldapSafeName(site, asciiLoginName(p.accountName), "account name");
     p.dn = site.compatTransform(site.fnUserDn(p.cn));
   });
   computeUids(site, personMap);
@@ -388,9 +389,9 @@ function ldapSafeName(site, name, kind) {
  */
 function computeUids(site, personMap) {
   const persons = Object.values(personMap);
-  // The entry DN (and cn) keeps the account name with brackets removed, all login names are
-  // that name transliterated to ASCII. Binds resolve the bound cn back to the original
-  // ChurchTools username before authenticating against the API, see resolveCtUsername().
+  // The entry DN/cn and all login names are the account name transliterated to ASCII with
+  // brackets removed. Binds resolve the bound cn back to the original ChurchTools username
+  // before authenticating against the API, see resolveCtUsername().
   const loginCounts = {};
   persons.forEach((p) => {
     p.login = ldapSafeName(site, asciiLoginName(p.accountName), "login name");
@@ -709,7 +710,7 @@ function requestUsers(req, _res, next) {
     const { p2g, personMap, groupMap } = await fetchAll(site);
     const smbSid = site.smbEnabled ? smbStore.getSiteSid(site) : null;
     let newCache = Object.entries(personMap).map(([id, p]) => {
-      // The cn matches the entry DN: the account name (see computeAccountNames()) without brackets.
+      // The cn matches the entry DN: the ASCII-transliterated account name without brackets.
       const cn = p.cn;
       const email = site.compatTransformEmail(p['email']);
       const uidNumber = POSIX_ID_BASE + Number(id);
@@ -754,7 +755,7 @@ function requestUsers(req, _res, next) {
         memberOf: (p2g[id] || []).map((gid) => groupMap[gid].dn)
       };
       if (smbSid) {
-        // The NT hash is stored under the name used in the bind DN: usually the username (the
+        // The NT hash is stored under the name used in the bind DN: usually the login name (the
         // cn of the entry DN), but clients may also bind with an email alias as cn -
         // ChurchTools accepts email logins on its API.
         const smb = [...new Set([cn, ...p.uids])]
@@ -1007,9 +1008,10 @@ function endSuccess(_req, res, next) {
 
 /**
  * Resolves the cn a client binds with back to the ChurchTools username. Entry cn values may
- * differ from it: they have brackets removed (see ldapSafeName()) and may be derived from the
- * primary email's local part (see computeAccountNames()), so the ChurchTools username must be
- * restored before it is sent to the ChurchTools API. Names that match no person - the admin
+ * differ from it: they are transliterated to ASCII (see asciiLoginName()), have brackets
+ * removed (see ldapSafeName()) and may be derived from the primary email's local part (see
+ * computeAccountNames()), so the ChurchTools username must be restored before it is sent to
+ * the ChurchTools API. Names that match no person - the admin
  * bind, or an email alias, which ChurchTools accepts as login as well - are passed through
  * unchanged.
  * @param {object} site The site of the bind.
@@ -1027,7 +1029,7 @@ async function resolveCtUsername(site, cn) {
     return person ? person['cmsUserId'] : cn;
   } catch (error) {
     // Without the person data the bind name is the best guess - it only differs for
-    // usernames containing brackets or email-local-part account names.
+    // usernames containing non-ASCII characters or brackets, or email-local-part account names.
     logWarn(site, `Could not resolve bind name "${cn}" against ChurchTools persons: ${error}`);
     return cn;
   }
