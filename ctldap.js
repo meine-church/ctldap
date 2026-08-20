@@ -272,7 +272,7 @@ async function fetchPersons(site) {
   Object.values(personMap).forEach((p) => {
     // The entry name (cn) is the ASCII-transliterated account name without brackets: clients
     // like Synology DSM fail on DNs containing non-ASCII characters (e.g. umlauts).
-    p.cn = ldapSafeName(site, asciiLoginName(p.accountName), "account name");
+    p.cn = ldapSafeName(site, asciiName(p.accountName), "account name");
     p.dn = site.compatTransform(site.fnUserDn(p.cn));
   });
   computeUids(site, personMap);
@@ -338,14 +338,14 @@ const TRANSLIT_MAP = {
 };
 
 /**
- * Transliterates a login name to ASCII: German umlauts and ligatures via replacement table
- * (ö→oe, ß→ss, ...), any other diacritics via Unicode decomposition (ñ→n, ç→c, é→e, ...).
- * POSIX/nss login names must be ASCII (memberUid even has IA5 syntax by schema), and clients
- * like Synology DSM cannot handle accounts with non-ASCII names at all.
- * @param {string} name The login name, e.g. the ChurchTools username
+ * Transliterates a name used as LDAP cn/uid to ASCII: German umlauts and ligatures via
+ * replacement table (ö→oe, ß→ss, ...), any other diacritics via Unicode decomposition
+ * (ñ→n, ç→c, é→e, ...). POSIX/nss login and group names must be ASCII (memberUid even has
+ * IA5 syntax by schema), and clients like Synology DSM cannot handle non-ASCII names at all.
+ * @param {string} name The raw name, e.g. the ChurchTools username or group name
  * @return {string} The name with non-ASCII letters transliterated
  */
-function asciiLoginName(name) {
+function asciiName(name) {
   return name.replace(/[äöüÄÖÜßæÆøØœŒ]/g, (c) => TRANSLIT_MAP[c])
       .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
@@ -394,7 +394,7 @@ function computeUids(site, personMap) {
   // before authenticating against the API, see resolveCtUsername().
   const loginCounts = {};
   persons.forEach((p) => {
-    p.login = ldapSafeName(site, asciiLoginName(p.accountName), "login name");
+    p.login = ldapSafeName(site, asciiName(p.accountName), "login name");
     const lc = p.login.toLowerCase();
     loginCounts[lc] = (loginCounts[lc] || 0) + 1;
   });
@@ -512,15 +512,16 @@ async function fetchGroups(site) {
     g.variants = site.groupSyncActive
         ? GROUP_VARIANT_KEYS.filter((variant) => fieldChecked(info, fields[variant]))
         : ['members'];
-    // Pre-compute the LDAP entry name (cn, brackets removed) and "distinguished name"
-    g.cn = ldapSafeName(site, g['name'], "group name");
+    // Pre-compute the LDAP entry name (cn, ASCII-transliterated with brackets removed,
+    // see asciiName()) and "distinguished name"
+    g.cn = ldapSafeName(site, asciiName(g['name']), "group name");
     g.dn = site.compatTransform(site.fnGroupDn(g.cn));
     g.specialClasses = sgmKeys.filter((k) => info[k])
     groupMap[g['id']] = g;
   });
-  // Removing brackets can make two group names collide (e.g. "Team (A)" and "Team A"),
-  // which would yield two LDAP entries sharing one DN. Only names within the same variant
-  // collide, since each variant appends its own suffix.
+  // Transliteration and bracket removal can make two group names collide (e.g. "Team (A)"
+  // and "Team A", or "Bär" and "Baer"), which would yield two LDAP entries sharing one DN.
+  // Only names within the same variant collide, since each variant appends its own suffix.
   const cnCounts = {};
   Object.values(groupMap).forEach((g) => g.variants.forEach((variant) => {
     const key = `${variant}:${g.cn.toLowerCase()}`;
@@ -528,7 +529,7 @@ async function fetchGroups(site) {
   }));
   Object.entries(cnCounts).filter(([, count]) => count > 1).forEach(([key, count]) =>
       logWarn(site, `Group name "${key.substring(key.indexOf(':') + 1)}" is ambiguous ` +
-          `after removing brackets (${count} groups)!`));
+          `after transliteration (${count} groups)!`));
   if (site.groupSyncActive) {
     const matched = Object.values(groupMap).filter((g) => g.variants.length > 0).length;
     const entries = Object.values(groupMap).reduce((n, g) => n + g.variants.length, 0);
@@ -642,7 +643,7 @@ async function fetchAll(site) {
           return;
         }
         const name = `${g['name']} ${suffix}`;
-        const cn = ldapSafeName(site, name, "variant group name");
+        const cn = ldapSafeName(site, asciiName(name), "variant group name");
         groupMap[String(GROUP_VARIANT_OFFSETS[variant] + Number(id))] = {
           name,
           cn,
@@ -822,8 +823,9 @@ function requestGroups(req, _res, next) {
       return attributes;
     };
     const newCache = Object.entries(groupMap).map(([id, g]) => {
-      // The cn matches the entry DN: the ChurchTools group name without brackets. The unchanged
-      // name stays available as displayname, which is not part of any DN or filter lookup.
+      // The cn matches the entry DN: the ASCII-transliterated ChurchTools group name without
+      // brackets. The unchanged name stays available as displayname, which is not part of any
+      // DN or filter lookup.
       const cn = g.cn;
       const info = g['information'];
       const groupType = groupTypes[info['groupTypeId']];
@@ -1008,7 +1010,7 @@ function endSuccess(_req, res, next) {
 
 /**
  * Resolves the cn a client binds with back to the ChurchTools username. Entry cn values may
- * differ from it: they are transliterated to ASCII (see asciiLoginName()), have brackets
+ * differ from it: they are transliterated to ASCII (see asciiName()), have brackets
  * removed (see ldapSafeName()) and may be derived from the primary email's local part (see
  * computeAccountNames()), so the ChurchTools username must be restored before it is sent to
  * the ChurchTools API. Names that match no person - the admin
