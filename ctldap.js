@@ -150,9 +150,11 @@ const logSync = (site, msg) => config.cacheDisabled ? logDebug(site, msg) : logI
 
 /**
  * Retrieves data from cache as a Promise or refreshes the data with the provided (async) factory.
- * With a disabled cache (cacheLifetime 0), no entry is ever served or stored - but concurrent
+ * With a disabled cache (cacheLifetime 0), no entry is ever served as fresh data - but concurrent
  * requests for the same key still share the pending Promise, so one LDAP request never triggers
  * more than one ChurchTools fetch per key.
+ * If the factory fails, the last successfully fetched entry is served as stale data (up to
+ * staleMaxAge, regardless of the cache setting) instead of failing the LDAP request.
  * @param {object} site - The site for which to query the cache
  * @param {string} key - The cache key
  * @param {function} factory - A function returning a Promise that resolves with the new cache entry or rejects
@@ -172,17 +174,27 @@ function getCached(site, key, factory) {
         // Call the factory() function to retrieve the Promise for the fresh entry
         // Either resolve with the new entry (plus cache update), or pass on the rejection
         co.promise = factory().then((result) => {
-          if (config.cacheDisabled) {
-            // Keep no reference to the (potentially large) data set
-            logDebug(site, `Cache disabled, discarding entry for cache key "${key}".`);
-            co.entry = null;
-            co.time = -1;
-            return result;
-          }
+          // With a disabled cache, the entry is never served as fresh data (see above),
+          // it is only kept as stale fallback for failed refreshes (see below).
           logDebug(site, `Store cache entry for cache key "${key}".`)
           co.entry = result;
           co.time = new Date().getTime();
           return result;
+        }).catch((error) => {
+          // A failed ChurchTools fetch must not end up as an empty directory: clients like
+          // Synology DSM treat users/groups missing from a search result as deleted.
+          if (co.entry !== null) {
+            const staleAge = new Date().getTime() - co.time;
+            if (config.staleMaxAge < 0 || staleAge <= config.staleMaxAge) {
+              logWarn(site, `Cache refresh failed for key "${key}", `
+                  + `serving stale data (age: ${Math.round(staleAge / 1000)}s): ${error}`);
+              return co.entry;
+            }
+            logWarn(site, `Cache refresh failed for key "${key}", `
+                + `stale data too old (age: ${Math.round(staleAge / 1000)}s, `
+                + `max: ${Math.round(config.staleMaxAge / 1000)}s): ${error}`);
+          }
+          throw error;
         }).finally(() => {
           delete co.promise;
         });
@@ -871,6 +883,9 @@ function requestGroups(req, _res, next) {
     logSync(site, () => `Updated groups: ${newCache.length}`);
     return newCache;
   });
+  // Rejections are handled in sendGroups(). In a combined search, a failing sendUsers() aborts
+  // the chain before sendGroups() runs, and the then unhandled rejection would crash Node.js.
+  req.groupsPromise.catch(() => {});
   return next();
 }
 
@@ -953,7 +968,7 @@ function sendUsers(req, res, next) {
     return next();
   }, (error) => {
     logError(req.site, "Error whilst retrieving users: ", error);
-    return next();
+    return next(new OtherError());
   });
 }
 
@@ -974,7 +989,7 @@ function sendGroups(req, res, next) {
     return next();
   }, (error) => {
     logError(req.site, "Error whilst retrieving groups: ", error);
-    return next();
+    return next(new OtherError());
   });
 }
 

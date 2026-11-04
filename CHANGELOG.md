@@ -1,5 +1,25 @@
 # Changelog
 
+### 3.9.1
+- Fixed (ported from upstream 3.1.4): ChurchTools API failures during a cache refresh returned
+  an empty *success* response to LDAP clients. Clients like Synology DSM treat users/groups
+  missing from a search result as deleted, which invalidated Synology Drive client sessions
+  and caused full re-syncs. A proper LDAP error (`OtherError`) is now returned instead.
+- Fixed (ported from upstream 3.1.4): When the CT API is temporarily unavailable after a
+  successful data load, stale data is now served transparently. New option
+  `STALE_MAX_AGE_MS`/`staleMaxAge`: maximum age (ms) of stale data served on API errors
+  (default: 3600000 = 1h; `0` = never serve stale; negative = no limit). This also applies
+  with a disabled cache (`CACHE_LIFETIME_MS=0`): the last successfully fetched data is now
+  kept in memory, but only ever served as fallback for failed refreshes.
+- Fixed a crash (unhandled Promise rejection) of combined user/group searches when both data
+  sets fail to load, which the upstream fix alone would introduce.
+- ChurchTools API requests now time out after 30 seconds (per attempt, retried like other
+  network errors). Previously there was no timeout, so a hung request blocked all LDAP
+  searches waiting on the same data until it eventually ended.
+- Fixed network errors (timeouts, connection resets, DNS failures) never being retried: the
+  `beforeRetry` hook crashed on the missing HTTP response, which aborted the retry.
+- Updated to Node.js 24 (LTS), Node.js 18 is end-of-life.
+
 ### 3.9.0
 - Account names from the primary email address (`EMAIL_LOCALPART_NAMES`/`emailLocalpartNames`,
   **enabled by default**, also per site): the entry `cn`/DN and the canonical login name

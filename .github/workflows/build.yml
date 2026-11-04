@@ -17,7 +17,7 @@ jobs:
       # ctldap.js would build "successfully" and then crash at container start on the NAS.
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 24
       - name: Syntax check
         run: for f in *.js; do node --check "$f"; done
       - uses: docker/setup-buildx-action@v3

@@ -103,6 +103,11 @@ export class CtldapSite {
             retry: {
                 statusCodes: [403, 408, 413, 429, 500, 502, 503, 504, 521, 522, 524]
             },
+            // got has no timeout by default: a hung request would block all LDAP searches
+            // sharing its pending cache Promise. Applies per attempt, timeouts are retried.
+            timeout: {
+                request: 30000
+            },
             hooks: {
                 beforeRequest: [
                     options => {
@@ -119,7 +124,8 @@ export class CtldapSite {
                 ],
                 beforeRetry: [
                     (error, retryCount) => {
-                        if (error.response.statusCode === 403) {
+                        // Network errors (e.g. timeouts) have no response
+                        if (error.response?.statusCode === 403) {
                             logWarn(
                                 this,
                                 `CT API responded with HTTP 403, clearing cookies before retry ${retryCount}...`
