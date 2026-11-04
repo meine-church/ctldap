@@ -1,5 +1,13 @@
 # Changelog
 
+### 3.9.2
+- Every retried ChurchTools API request is now logged as warning (reason and URL), so transient
+  API failures become visible in the logs - previously, only HTTP 403 retries were logged.
+- Account name changes of a person between two syncs are now logged as warning. Account names
+  derived from email local parts may change due to data changes of other persons (see 3.9.0),
+  and LDAP clients like Synology DSM treat a renamed account as a different user. Renames
+  across a restart are not detected, since only the previous sync's data is compared.
+
 ### 3.9.1
 - Fixed (ported from upstream 3.1.4): ChurchTools API failures during a cache refresh returned
   an empty *success* response to LDAP clients. Clients like Synology DSM treat users/groups

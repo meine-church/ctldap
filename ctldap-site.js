@@ -124,6 +124,9 @@ export class CtldapSite {
                 ],
                 beforeRetry: [
                     (error, retryCount) => {
+                        // Logged at WARN level, transient ChurchTools failures are invisible otherwise
+                        const reason = error.response ? `HTTP ${error.response.statusCode}` : error.code;
+                        logWarn(this, `CT API request failed (${reason}), retry ${retryCount}: ${error.options.url}`);
                         // Network errors (e.g. timeouts) have no response
                         if (error.response?.statusCode === 403) {
                             logWarn(

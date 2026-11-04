@@ -287,6 +287,15 @@ async function fetchPersons(site) {
     p.cn = ldapSafeName(site, asciiName(p.accountName), "account name");
     p.dn = site.compatTransform(site.fnUserDn(p.cn));
   });
+  // Account names may also change with ChurchTools data of OTHER persons (see computeAccountNames()),
+  // and clients like Synology DSM treat a renamed account as a different user. Only compared against
+  // the previous sync, so renames across a restart go unnoticed.
+  const previous = site.CACHE[RAW_DATA_KEY]?.entry?.personMap;
+  if (previous) {
+    Object.values(personMap).filter((p) => previous[p['id']] && previous[p['id']].cn !== p.cn)
+        .forEach((p) => logWarn(site, `Account name of person ${p['id']} changed: ` +
+            `"${previous[p['id']].cn}" -> "${p.cn}"`));
+  }
   computeUids(site, personMap);
   return personMap;
 }
