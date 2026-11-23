@@ -94,11 +94,7 @@ export class CtldapSite {
         this.fnUserDn = (cn) => ldapEscape.dn`cn=${cn},ou=users,o=${name}`;
         this.fnGroupDn = (cn) => ldapEscape.dn`cn=${cn},ou=groups,o=${name}`;
         this.fnSmbDomainDn = (domain) => ldapEscape.dn`sambaDomainName=${domain},o=${name}`;
-        // Let us keep cookies, which may improve CT API performance.
-        // We have to use a pool of CookieJars in order to avoid ChurchTools HTTP 403 bugs.
-        const cookieJars = []
-        this.api = got.extend({
-            headers: {"Authorization": `Login ${site.apiToken}`},
+        const apiDefaults = {
             prefixUrl: `${site.ctUri.replace(/\/$/g, '')}/api`,
             retry: {
                 statusCodes: [403, 408, 413, 429, 500, 502, 503, 504, 521, 522, 524]
@@ -108,6 +104,22 @@ export class CtldapSite {
             timeout: {
                 request: 30000
             },
+            responseType: 'json',
+            resolveBodyOnly: true,
+            http2: true
+        };
+        // User logins get their own client without the technical Authorization token or the
+        // CookieJar pool below: ChurchTools session cookies take precedence over API tokens,
+        // so a user session leaking into the pool would make technical directory reads run
+        // with the user's identity. As this client sends and keeps no cookies at all,
+        // concurrent logins remain isolated, too.
+        this.loginApi = got.extend(apiDefaults);
+        // Let us keep cookies, which may improve CT API performance.
+        // We have to use a pool of CookieJars in order to avoid ChurchTools HTTP 403 bugs.
+        const cookieJars = []
+        this.api = got.extend({
+            ...apiDefaults,
+            headers: {"Authorization": `Login ${site.apiToken}`},
             hooks: {
                 beforeRequest: [
                     options => {
@@ -149,9 +161,6 @@ export class CtldapSite {
                     }
                 ],
             },
-            responseType: 'json',
-            resolveBodyOnly: true,
-            http2: true
         });
         this.adminDn = this.fnUserDn(site.ldapUser);
         this.CACHE = {

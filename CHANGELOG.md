@@ -1,5 +1,12 @@
 # Changelog
 
+### 3.9.3
+- Fixed (ported from upstream 3.1.6): User logins shared the API client and CookieJar pool of the
+  directory sync, so a user's ChurchTools session could end up in the pool. A sync request retried
+  after a temporary API failure then ran with that user's identity and could return only the data
+  visible to this user. LDAP clients like Synology DSM treat the missing users/groups as deleted
+  and affected accounts as renamed. Logins now use a separate client without token and cookies.
+
 ### 3.9.2
 - Every retried ChurchTools API request is now logged as warning (reason and URL), so transient
   API failures become visible in the logs - previously, only HTTP 403 retries were logged.

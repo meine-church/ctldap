@@ -1093,7 +1093,7 @@ async function authenticate(req, _res, next) {
   const bindName = parseDN(req.dn).rdnAt(0).getValue("cn");
   const username = await resolveCtUsername(site, bindName);
   try {
-    await site.api.post('login', {
+    await site.loginApi.post('login', {
       json: {
         "username": username,
         "password": req.credentials
